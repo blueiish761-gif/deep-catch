@@ -63,10 +63,18 @@ button:active{transform:scale(.93)}
 </style>
 </head>
 <body>
-<div id="root"></div>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<div id="root">
+  <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:#000c18;color:#8ecfff;font-family:-apple-system,BlinkMacSystemFont,'Noto Sans SC',sans-serif;text-align:center;line-height:1.7">
+    <div>
+      <div style="font-size:42px;margin-bottom:10px">🤿</div>
+      <div style="font-weight:700;margin-bottom:6px">深海捕手正在加载...</div>
+      <div style="font-size:12px;color:#4a8aaa">如果一直停在这里，请确认 vendor 目录里的 React 和 Babel 文件已经一起上传。</div>
+    </div>
+  </div>
+</div>
+<script src="./vendor/react.production.min.js"></script>
+<script src="./vendor/react-dom.production.min.js"></script>
+<script src="./vendor/babel.min.js"></script>
 <script type="text/babel" data-presets="react">
 const {useState,useEffect,useRef,useCallback}=React;
 
@@ -406,9 +414,11 @@ function DeepCatch(){
   const [nightEarnings, setNightEarnings]=useState(0);
 
   const NIGHT_DURATION=180000; // 3分钟夜晚营业时间
+  const NIGHT_CUSTOMER_LIMIT=12; // 每晚最多接待人数，到量后自动打烊
   // ── dive ──
   const [dive,    setDive]  =useState(null);
   const [fishTalk,setFishTalk]=useState(null);
+  const [fishing,setFishing]=useState(null);
   // ── UI ──
   const [tab,     setTab]   =useState("map");
   const [selZone, setSelZone]=useState("coral");
@@ -431,10 +441,15 @@ function DeepCatch(){
 
   const diveRef=useRef(null);
   diveRef.current=dive;
+  const fishingRef=useRef(null);
+  fishingRef.current=fishing;
   const custRef=useRef(null);
   custRef.current=customers;
   const cookRef=useRef(null);
   cookRef.current=cookQueue;
+  const servedRef=useRef(0);
+  servedRef.current=nightServeCount;
+  const nightEndedRef=useRef(false);
 
   const addLog=m=>setGLog(p=>[m,...p].slice(0,80));
   const addRLog=m=>setRestLog(p=>[{msg:m,t:Date.now()},...p].slice(0,40));
@@ -458,6 +473,65 @@ function DeepCatch(){
 
   // unlock dishes based on restaurant level
   const availDishes=ALL_DISHES.filter(d=>d.unlockRest<=restLv);
+  const getOpenOrders=(list=customers)=>list
+    .filter(c=>(c.status==="waiting"||c.status==="eating")&&c.orderFishId)
+    .reduce((m,c)=>({...m,[c.orderFishId]:(m[c.orderFishId]||0)+1}),{});
+  const getAvailableOrderDishes=(list=customers)=> {
+    const reserved=getOpenOrders(list);
+    return availDishes.filter(d=>((inv[d.fishId]||0)-(reserved[d.fishId]||0))>0);
+  };
+  const isBossFish=f=>f.hp>=300;
+  const getDishForCustomer=(base,list=customers)=> {
+    const stocked=getAvailableOrderDishes(list);
+    if(!stocked.length) return null;
+    const preferred=stocked.filter(d=>d.taste>=base.prefer);
+    const pool=preferred.length?preferred:stocked;
+    return pool[Math.floor(Math.random()*pool.length)];
+  };
+
+  function finishNight(reason="🌙 营业结束，进入下一天！", restReason=null){
+    if(nightEndedRef.current||phase!=="night") return;
+    nightEndedRef.current=true;
+    addLog(reason);
+    if(restReason) addRLog(restReason);
+    setPhase("day");setDives(0);setDay(p=>p+1);setDayEarn(0);
+    setCustomers([]);setCookQueue([]);
+    rollWeather();
+    if(day%3===0){
+      const newQ=QUEST_POOL.sort(()=>Math.random()-0.5).slice(0,4).map(q=>({...q,done:false,progress:0}));
+      setQuests(newQ);setQProg({});addLog("📋 新任务已刷新！");
+    }
+    const rxpMult=hasS("w8")?1.25:1.0;
+    setRestXp(prev=>{
+      const next=prev+nightServeCount*50*rxpMult;
+      const need=restLv*1000;
+      if(next>=need){setRestLv(l=>{notify(`🍣 餐厅升级→${l+1}★！解锁更多菜品！`);return l+1;});return 0;}
+      return next;
+    });
+    const nextDay=day+1;
+    const nextMD=getMonthDay(nextDay);
+    const nextFest=getFestival(nextMD);
+    const nextSeason=getSeason(nextMD);
+    const curMD=getMonthDay(day);
+    const curSeas=getSeason(curMD);
+    if(nextSeason.id!==curSeas.id){
+      addLog(`${nextSeason.emoji} 季节更替！进入${nextSeason.name} — ${nextSeason.desc}`);
+    }
+    if(nextFest){
+      addLog(`🎉 明天是【${nextFest.name}】${nextFest.emoji} ${nextFest.desc}`);
+      setActiveFestival(nextFest);
+      if(nextFest.effect?.unlockAbyss) setAbyssUnlocked(true);
+      if(nextFest.specialMenu) setFestivalMenu(nextFest.specialMenu);
+    } else {
+      setActiveFestival(null);
+      setAbyssUnlocked(false);
+      setFestivalMenu(null);
+    }
+    addLog(`☀️ 第${day+1}天开始！夜间营收¥${nightEarnings.toLocaleString()}，接待${nightServeCount}桌`);
+    setNightServeCount(0);
+    setNightEarnings(0);
+    setTab("map");
+  }
 
   // ── init quests ──
   useEffect(()=>{
@@ -500,6 +574,29 @@ function DeepCatch(){
   // ── SURFACE REF (氧气不再自动消耗，改为换区域/被攻击时扣除) ──
   const surfaceRef=useRef(null);
   useEffect(()=>{surfaceRef.current=doSurface;});
+
+  useEffect(()=>{
+    if(!fishing||screen!=="dive") return;
+    const t=setInterval(()=>{
+      setFishing(g=>{
+        if(!g) return g;
+        const nextTarget=g.target+g.dir*(1.1+g.difficulty/28);
+        const dir=nextTarget>86?-1:nextTarget<14?1:g.dir;
+        const target=Math.max(10,Math.min(90,nextTarget));
+        const cursor=g.cursor+(50-g.cursor)*0.06;
+        const distance=Math.abs(cursor-target);
+        const progress=Math.max(0,Math.min(100,g.progress+(distance<12?2.8:-1.8-g.difficulty/45)));
+        if(progress>=100){setTimeout(()=>finishFishing(true),0);return {...g,progress:100,target,cursor,dir};}
+        if(progress<=0){setTimeout(()=>finishFishing(false),0);return {...g,progress:0,target,cursor,dir};}
+        return {...g,target,cursor,dir,progress};
+      });
+    },80);
+    return ()=>clearInterval(t);
+  },[fishing,screen]);
+
+  const pullFishing=()=>{
+    setFishing(g=>g?{...g,cursor:Math.max(4,g.cursor-8)}:g);
+  };
 
 
   // ── RESTAURANT live tick: customer patience & cook timer ──
@@ -570,10 +667,12 @@ function DeepCatch(){
   // ── spawn customers at night ──
   useEffect(()=>{
     if(screen!=="main"||phase!=="night") return;
-    const spawnCustomer=()=>{
+  const spawnCustomer=()=>{
       const cs=custRef.current;
       const maxTables=tableCount+(hasU("r4")?2:0);
-      if(cs.filter(c=>c.status==="waiting"||c.status==="eating").length>=maxTables) return;
+      const activeCount=cs.filter(c=>c.status==="waiting"||c.status==="eating").length;
+      if(activeCount>=maxTables) return;
+      if(servedRef.current+activeCount>=NIGHT_CUSTOMER_LIMIT) return;
       // pick customer type based on restaurant level & upgrades
       let pool=[...CUSTOMER_TYPES];
       if(restLv<3) pool=pool.filter(c=>c.prefer<=2);
@@ -581,7 +680,13 @@ function DeepCatch(){
       if(hasU("r6")) pool=[...pool,...CUSTOMER_TYPES.filter(c=>c.type==="foodie")]; // extra foodie
       const custMod=weather.custMod;
       if(Math.random()>custMod) return; // weather reduces spawns
-      const base=pool[Math.floor(Math.random()*pool.length)];
+      let base=null, order=null;
+      for(let tries=0;tries<12;tries++){
+        base=pool[Math.floor(Math.random()*pool.length)];
+        order=getDishForCustomer(base,cs);
+        if(order) break;
+      }
+      if(!order) return;
       const patience=(base.patience+(hasU("r3")?20:0))*1000;
       const now=Date.now();
       const newCust={
@@ -596,11 +701,15 @@ function DeepCatch(){
         tipRate:base.tip+(hasS("w3")?0.05:0),
         prefer:base.prefer,
         spendMult:base.spendMult,
+        orderDishId:order.id,
+        orderFishId:order.fishId,
+        orderName:order.name,
+        orderEmoji:order.emoji,
         satisfied:false,
         arrivedAt:now,
       };
       setCustomers(p=>[...p,newCust]);
-      addRLog(`🚶 ${base.emoji}${base.name}进门了！`);
+      addRLog(`🚶 ${base.emoji}${base.name}点了 ${order.emoji}${order.name}`);
     };
     // 夜晚开始立刻来2个客人
     spawnCustomer();
@@ -610,7 +719,7 @@ function DeepCatch(){
     const interval=900;
     const t=setInterval(spawnCustomer,interval);
     return ()=>clearInterval(t);
-  },[screen,phase,restLv,hasU,hasS,tableCount,weather]);
+  },[screen,phase,restLv,hasU,hasS,tableCount,weather,inv,nightServeCount]);
 
 
   // ── AUTO END NIGHT ──
@@ -618,13 +727,7 @@ function DeepCatch(){
     if(screen!=="main"||phase!=="night") return;
 
     const timer=setTimeout(()=>{
-      addLog("🌙 营业结束，进入下一天！");
-      setPhase("day");
-      setDay(d=>d+1);
-      setCustomers([]);
-      setCookQueue([]);
-      setNightServeCount(0);
-      setNightEarnings(0);
+      finishNight("🌙 营业时间到，自动进入下一天！","🕛 时间到，今晚营业结束。");
     }, NIGHT_DURATION);
 
     return ()=>clearTimeout(timer);
@@ -633,25 +736,28 @@ function DeepCatch(){
   // ── AUTO SKIP NIGHT WHEN SOLD OUT ──
   useEffect(()=>{
     if(screen!=="main"||phase!=="night") return;
-    const totalStock=availDishes.reduce((sum,d)=>sum+(inv[d.fishId]||0),0);
+    const totalStock=getAvailableOrderDishes(customers).length;
     const activeCustomers=customers.filter(c=>c.status==="waiting"||c.status==="eating").length;
     const activeCooking=cookQueue.length;
 
     if(totalStock<=0 && activeCustomers===0 && activeCooking===0){
       setTimeout(()=>{
-        addLog("🍽️ 菜品已售罄，自动结束营业！");
-        setPhase("day");
-        setDay(d=>d+1);
-        setCustomers([]);
-        setCookQueue([]);
+        finishNight("🍽️ 菜品已售罄，自动结束营业！","🍽️ 食材卖完，提前打烊。");
+      },1000);
+    }else if(nightServeCount>=NIGHT_CUSTOMER_LIMIT && activeCustomers===0 && activeCooking===0){
+      setTimeout(()=>{
+        finishNight(`🏮 已接待${NIGHT_CUSTOMER_LIMIT}桌，自动结束营业！`,"🏮 今晚客流已满，收摊休息。");
       },1000);
     }
-  },[screen,phase,inv,customers,cookQueue]);
+  },[screen,phase,inv,customers,cookQueue,nightServeCount]);
 
   // ── SERVE DISH to customer ──
   const serveDish=(custUid, dish)=>{
     const cust=customers.find(c=>c.uid===custUid);
     if(!cust||cust.status!=="waiting") return;
+    const ordered=availDishes.find(d=>d.fishId===cust.orderFishId)||dish;
+    if(!ordered) return;
+    dish=ordered;
     if((inv[dish.fishId]||0)<=0){notify(`❌ 没有 ${dish.fishName}！`);return;}
     const cookMult=hasU("r7")?0.6:1.0;
     const cookMs=Math.floor(dish.cookTime*1000*cookMult*(hasS("w1")?0.80:1.0));
@@ -741,51 +847,57 @@ function DeepCatch(){
     setDives(p=>p+1);setDive(null);setScreen("main");setTab("map");
   };
 
-  const catchFish=async fish=>{
+  const startFishingChallenge=fish=>{
     if(!dive||fish.caught||fish.fled) return;
     if(fish.prot||fish.v===0){
       setDive(p=>({...p,dlog:[`📷 ${fish.n}是保护动物！拍照 +${fish.xp}XP`,...p.dlog],fish:p.fish.map(f=>f.uid===fish.uid?{...f,caught:true}:f),caughtMap:{...p.caughtMap,[fish.id]:(p.caughtMap[fish.id]||0)+1}}));
       gainXp(fish.xp);updateQuest("fish",fish.id,1);return;
     }
     if(dive.cargo+fish.w>dive.maxCargo){setDive(p=>({...p,dlog:[`📦 装载箱满！${fish.n}放不下`,...p.dlog]}));return;}
-    if(fish.ag&&!aiLoad){
-      setAiLoad(true);
-      fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:60,system:`你是深海游戏里凶猛的${fish.n}(HP:${fish.curHp}/${fish.hp})。玩家来抓你。一句话第一人称野性反击（中文不超过18字）。`,messages:[{role:"user",content:"玩家靠近！"}]})})
-        .then(r=>r.json()).then(d=>{setFishTalk(`${fish.e} ${fish.n}：${d.content?.[0]?.text||""}`);setTimeout(()=>setFishTalk(null),3500);})
-        .catch(()=>{}).finally(()=>setAiLoad(false));
+    const catchBonus=hasS("w7")?8:0;
+    const baseDifficulty=22+fish.q*7+(fish.ag?8:0)+(isBossFish(fish)?16:0)-Math.floor(eq("harpoon").rate*18)-catchBonus-Math.floor(festCatchBonus*100);
+    setFishing({
+      fishUid:fish.uid,fishId:fish.id,name:fish.n,emoji:fish.e,weight:fish.w,xp:fish.xp,
+      progress:35,cursor:50,target:35+Math.random()*30,dir:Math.random()>.5?1:-1,
+      difficulty:Math.max(10,Math.min(55,baseDifficulty)),
+      o2Penalty:Math.max(6,Math.floor((fish.dmg||fish.q*4)*(fish.ag?2.2:1.4)+fish.q*3)),
+      rare:fish.rare,ag:fish.ag
+    });
+    if(fish.ag){
+      const lines=["别靠近我的水域！","想抓我？先追上我！","水流会替我挡住你！","看准了再下叉！"];
+      setFishTalk(`${fish.e} ${fish.n}：${lines[Math.floor(Math.random()*lines.length)]}`);
+      setTimeout(()=>setFishTalk(null),2500);
     }
-    const catchBonus=hasS("w7")?0.08:0;
-    const rate=Math.min(0.99,eq("harpoon").rate+weather.catchMod+catchBonus+festCatchBonus);
-    const ok=Math.random()<rate;
+  };
+
+  const catchFish=startFishingChallenge;
+
+  const finishFishing=(ok)=>{
+    const game=fishingRef.current;
+    if(!game) return;
     const defMult=hasS("w6")?0.7:1.0;
     const logs=[];
     if(ok){
-      const nm={...dive.caughtMap,[fish.id]:(dive.caughtMap[fish.id]||0)+1};
-      logs.push(`✅ 捕获${fish.n}(${fish.w}kg) +${fish.xp}XP`);
+      const current=diveRef.current;
+      const nm={...(current?.caughtMap||{}),[game.fishId]:((current?.caughtMap||{})[game.fishId]||0)+1};
+      logs.push(`✅ 捕获${game.name}(${game.weight}kg) +${game.xp}XP`);
       if(festPriceMult>1) logs.push(`🎉 节日加成·价值×${festPriceMult}！`);
-      setDive(p=>({...p,fish:p.fish.map(f=>f.uid===fish.uid?{...f,caught:true}:f),caughtMap:nm,cargo:p.cargo+fish.w,dlog:[...logs,...p.dlog]}));
-      gainXp(fish.xp);updateQuest("fish",fish.id,1);
+      setDive(p=>({...p,fish:p.fish.map(f=>f.uid===game.fishUid?{...f,caught:true}:f),caughtMap:nm,cargo:p.cargo+game.weight,dlog:[...logs,...p.dlog]}));
+      gainXp(game.xp);updateQuest("fish",game.fishId,1);
     } else {
-      // 捕捉失败：有攻击性的鱼会反击，扣除氧气（不扣HP）
-      if(fish.ag){
-        const o2dmg=Math.floor(fish.dmg*defMult*2+Math.random()*8); // 攻击转化为氧气消耗
-        const hpdmg=Math.floor(fish.dmg*defMult*0.5); // 少量HP也扣
-        logs.push(`💥 ${fish.n}反击！消耗${o2dmg}氧气 -${hpdmg}HP`);
-        setDive(p=>{
-          const newO2=Math.max(0,p.o2-o2dmg);
-          const newHp=Math.max(0,p.hp-hpdmg);
-          const fled={...p,fish:p.fish.map(f=>f.uid===fish.uid?{...f,fled:true}:f),o2:newO2,hp:newHp,dlog:[...logs,...p.dlog]};
-          if(newO2<=0){
-            addLog("💀 氧气耗尽！紧急上浮！");
-            setTimeout(()=>{if(surfaceRef.current) surfaceRef.current(fled);},100);
-          }
-          return fled;
-        });
-      } else {
-        logs.push(`❌ ${fish.n}逃脱了！`);
-        setDive(p=>({...p,fish:p.fish.map(f=>f.uid===fish.uid?{...f,fled:true}:f),dlog:[...logs,...p.dlog]}));
-      }
+      const o2dmg=Math.floor(game.o2Penalty*defMult+Math.random()*6);
+      logs.push(`❌ ${game.name}挣脱了！氧气 -${o2dmg}`);
+      setDive(p=>{
+        const newO2=Math.max(0,p.o2-o2dmg);
+        const fled={...p,fish:p.fish.map(f=>f.uid===game.fishUid?{...f,fled:true}:f),o2:newO2,dlog:[...logs,...p.dlog]};
+        if(newO2<=0){
+          addLog("💀 氧气耗尽！紧急上浮！");
+          setTimeout(()=>{if(surfaceRef.current) surfaceRef.current(fled);},100);
+        }
+        return fled;
+      });
     }
+    setFishing(null);
   };
 
   const shootFish=fish=>{
@@ -873,48 +985,13 @@ function DeepCatch(){
     setWeather(w);addLog(`${w.emoji} 今日天气：${w.name}（${w.desc}）`);
   };
   const endDay=()=>{
+    nightEndedRef.current=false;
     setPhase("night");setTab("restaurant");setCustomers([]);setCookQueue([]);setNightEarnings(0);setNightServeCount(0);
     addLog(`🌙 第${day}天夜晚·餐厅开始营业！声誉${reputation}·评分${rating}`);
     addRLog("🏮 餐厅开门！迎接今夜的客人…");
   };
   const endNight=()=>{
-    setPhase("day");setDives(0);setDay(p=>p+1);setDayEarn(0);
-    setCustomers([]);setCookQueue([]);
-    rollWeather();
-    if(day%3===0){
-      const newQ=QUEST_POOL.sort(()=>Math.random()-0.5).slice(0,4).map(q=>({...q,done:false,progress:0}));
-      setQuests(newQ);setQProg({});addLog("📋 新任务已刷新！");
-    }
-    // restaurant XP from night
-    const rxpMult=hasS("w8")?1.25:1.0;
-    setRestXp(prev=>{
-      const next=prev+nightServeCount*50*rxpMult;
-      const need=restLv*1000;
-      if(next>=need){setRestLv(l=>{notify(`🍣 餐厅升级→${l+1}★！解锁更多菜品！`);return l+1;});return 0;}
-      return next;
-    });
-    const nextDay=day+1;
-    const nextMD=getMonthDay(nextDay);
-    const nextFest=getFestival(nextMD);
-    const nextSeason=getSeason(nextMD);
-    // announce season change
-    const curMD=getMonthDay(day);
-    const curSeas=getSeason(curMD);
-    if(nextSeason.id!==curSeas.id){
-      addLog(`${nextSeason.emoji} 季节更替！进入${nextSeason.name} — ${nextSeason.desc}`);
-    }
-    if(nextFest){
-      addLog(`🎉 明天是【${nextFest.name}】${nextFest.emoji} ${nextFest.desc}`);
-      setActiveFestival(nextFest);
-      if(nextFest.effect?.unlockAbyss) setAbyssUnlocked(true);
-      if(nextFest.specialMenu) setFestivalMenu(nextFest.specialMenu);
-    } else {
-      setActiveFestival(null);
-      setAbyssUnlocked(false);
-      setFestivalMenu(null);
-    }
-    addLog(`☀️ 第${day+1}天开始！夜间营收¥${nightEarnings.toLocaleString()}，接待${nightServeCount}桌`);
-    setTab("map");
+    finishNight("☀️ 结束营业，进入新的一天！","🏮 店铺打烊，今日结算完成。");
   };
 
   const buyEq=(type,item)=>{
@@ -936,21 +1013,67 @@ function DeepCatch(){
     addLog(`✨ 购买餐厅升级：${u.name}！`);
   };
 
-  const askAi=async()=>{
-    if(!aiIn.trim()||aiLoad) return;
-    const msg=aiIn;setAiIn("");setAiLoad(true);
-    const invStr=Object.entries(inv).filter(([,n])=>n>0).map(([id,n])=>`${FISH[id]?.n}×${n}`).join("，")||"无";
-    const sys=`你是深海捕手游戏AI顾问（仿潜水员戴夫风格）。
-状态：¥${gold} Lv${level} 第${day}天${phase==="day"?"白天(潜"+dives+"/2)":"夜晚"} ${weather.emoji}${weather.name} 餐厅${restLv}★ 声誉${reputation} 评分${rating}
-装备：${eq("harpoon").name}·${eq("suit").name}·${eq("tank").name}·${eq("cargo").name}·${eq("gun").id!=="g0"?eq("gun").name+"×"+ammo:"无枪"}
-库存：${invStr} 已发现:${Object.keys(codex).length}/${Object.keys(FISH).length}种
-活泼简短给出策略（120字内）。`;
-    const newH=[...aiHist,{role:"user",content:msg}];
+  const AI_QUESTIONS=[
+    "去哪潜水最值？","最赚钱菜品？","装备升级顺序？","怎么提升评分？",
+    "BOSS怎么打？","图鉴怎么集齐？","捕鱼怎么玩？","营业规则？"
+  ];
+
+  const getAdvisorState=()=>({
+    gold,level,xp,day,phase,dives,weather:{name:weather.name,desc:weather.desc},
+    restaurant:{level:restLv,reputation,rating,servedTonight:nightServeCount,earningsTonight:nightEarnings,customerLimit:NIGHT_CUSTOMER_LIMIT},
+    equipment:{
+      harpoon:eq("harpoon").name,gun:eq("gun").id!=="g0"?`${eq("gun").name}(${ammo}发)`:"无枪械",
+      tank:eq("tank").name,suit:eq("suit").name,cargo:eq("cargo").name
+    },
+    inventory:Object.entries(inv).filter(([,n])=>n>0).map(([id,n])=>({id,name:FISH[id]?.n||id,count:n,value:FISH[id]?.v||0,cook:FISH[id]?.cook||""})).slice(0,40),
+    codexCount:Object.keys(codex).length,
+    totalFish:Object.keys(FISH).length,
+    gameData:{
+      zones:Object.values(ZONES).map(z=>({id:z.id,name:z.name,depths:z.depths,minSuit:z.minSuit,cost:z.cost,desc:z.desc})),
+      fish:Object.entries(FISH).map(([id,f])=>({id,name:f.n,zone:f.z,depth:f.d,weight:f.w,value:f.v,xp:f.xp,quality:f.q,aggressive:f.ag,protected:f.prot,cook:f.cook||"",price:f.basePrice||0,taste:f.taste||0,desc:f.desc})),
+      equipment:EQUIP,
+      restaurantUpgrades:REST_UPGRADES,
+      staff:STAFF,
+      quests:QUEST_POOL,
+      festivals:FESTIVALS
+    },
+    activeCustomers:customers.filter(c=>c.status==="waiting"||c.status==="eating").map(c=>({type:c.name,order:c.orderName,status:c.status})).slice(0,8),
+    fishingRule:"捕捉会进入小游戏；小游戏过程中不持续消耗氧气；失败扣氧气。夜晚客人只点库存可做的菜，卖完或达接待上限会自动打烊。"
+  });
+
+  const localAdvisorAnswer=msg=>{
+    if(msg.includes("潜水")) return `当前餐厅${restLv}★，优先去装备能进入的最高价值水域。新手先刷珊瑚礁和海藻森林攒库存；解锁中层/大洋后再追金枪鱼、旗鱼这类高价值鱼。`;
+    if(msg.includes("赚钱")||msg.includes("菜品")) return "优先卖高品质且库存足的菜。金枪鱼、龙虾、旗鱼、皇带鱼、水晶鱼都很强；夜晚保证每桌能上菜，比菜单花哨更重要。";
+    if(msg.includes("装备")) return "推荐升级顺序：装载箱 > 氧气瓶 > 潜水服 > 鱼叉 > 枪械。装载和氧气先提高单次收益，潜水服负责解锁高价值水域。";
+    if(msg.includes("评分")) return "评分靠稳定上菜。白天先攒库存，夜晚客人只会点库存菜；卖完或接待满上限后自动打烊，避免无菜可上的卡顿。";
+    if(msg.includes("BOSS")) return "BOSS先用枪削血，氧气低于30%就补给或上浮。捕鱼挑战失败会扣氧气，打BOSS前先升级氧气瓶和装载箱。";
+    if(msg.includes("图鉴")) return "按水域和深度轮换探索；节日会提高特殊鱼出现率。保护动物用拍照完成图鉴，稀有鱼等氧气充足时再挑战。";
+    if(msg.includes("捕鱼")) return "点击捕捉进入钓鱼挑战。按“收线”让白色游标贴住绿色区域，进度满就捕获；进度归零鱼逃跑并扣氧气。";
+    if(msg.includes("营业")) return `客人进门只会点当前库存能做的菜。库存卖完，或接待达到${NIGHT_CUSTOMER_LIMIT}桌且桌台清空后，会自动结束营业。`;
+    return `我现在可以联网请求真实顾问；如果后端没配置好，会先给本地建议。可选问题：${AI_QUESTIONS.join("、")}。`;
+  };
+
+  const askAi=async(preset=null)=>{
+    if(aiLoad) return;
+    const msg=(typeof preset==="string"?preset:aiIn).trim();
+    if(!msg) return;
+    setAiIn("");
+    const newH=[...aiHist,{role:"user",content:msg}].slice(-12);
+    setAiHist(newH);
+    setAiLoad(true);
     try{
-      const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,system:sys,messages:newH})});
+      const endpoint=window.DEEP_CATCH_ADVISOR_API_URL||"/api/advisor";
+      const r=await fetch(endpoint,{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({message:msg,state:getAdvisorState(),history:newH.slice(-8)})
+      });
       const d=await r.json();
-      setAiHist([...newH,{role:"assistant",content:d.content?.[0]?.text||"…"}]);
-    }catch{setAiHist([...newH,{role:"assistant",content:"网络异常…"}]);}
+      if(!r.ok) throw new Error(d.error||"advisor request failed");
+      setAiHist([...newH,{role:"assistant",content:d.answer||localAdvisorAnswer(msg)}].slice(-20));
+    }catch(err){
+      setAiHist([...newH,{role:"assistant",content:`顾问后端暂时不可用，先给你本地建议：${localAdvisorAnswer(msg)}`}].slice(-20));
+    }
     setAiLoad(false);
   };
 
@@ -984,7 +1107,7 @@ function DeepCatch(){
     const o2p=(dive.o2/dive.maxO2)*100;
     const hpp=(dive.hp/dive.maxHp)*100;
     const cp=(dive.cargo/dive.maxCargo)*100;
-    const isBoss=f=>f.hp>=300;
+    const isBoss=isBossFish;
     // pick fish swim animation by type
     const fishAnim=f=>{
       if(f.caught||f.fled) return "none";
@@ -1079,6 +1202,26 @@ function DeepCatch(){
         {notif&&(
           <div style={{background:"rgba(0,160,80,.35)",border:"1px solid #44cc88",borderRadius:10,padding:"8px 14px",marginBottom:10,fontSize:12,color:"#ccffdd",animation:"pop .2s ease",backdropFilter:"blur(4px)"}}>
             {notif}
+          </div>
+        )}
+
+        {fishing&&(
+          <div style={{background:"linear-gradient(180deg,rgba(0,20,55,.95),rgba(0,45,85,.92))",border:"1px solid rgba(0,190,255,.45)",borderRadius:14,padding:12,marginBottom:10,boxShadow:"0 8px 30px rgba(0,0,0,.35)"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+              <div style={{fontSize:13,fontWeight:800,color:"#cceeff"}}>{fishing.emoji} 正在捕捉 {fishing.name}</div>
+              <div style={{fontSize:9,color:fishing.ag?"#ff9966":"#66ccff"}}>{fishing.rare?"稀有 ":""}难度 {Math.round(fishing.difficulty)}</div>
+            </div>
+            <div style={{position:"relative",height:86,background:"linear-gradient(180deg,rgba(0,80,130,.35),rgba(0,18,40,.8))",border:"1px solid rgba(0,120,190,.35)",borderRadius:10,overflow:"hidden",marginBottom:9}}>
+              <div style={{position:"absolute",left:`${fishing.target}%`,top:10,width:34,height:66,marginLeft:-17,borderRadius:8,background:"rgba(80,255,160,.22)",border:"1px solid #44ee99",boxShadow:"0 0 18px rgba(80,255,160,.25)"}}/>
+              <div style={{position:"absolute",left:`${fishing.cursor}%`,top:6,width:4,height:74,marginLeft:-2,borderRadius:4,background:"#fff",boxShadow:"0 0 12px #00d4ff"}}/>
+              <div style={{position:"absolute",left:10,right:10,bottom:8,height:7,background:"rgba(0,0,0,.45)",borderRadius:4,overflow:"hidden"}}>
+                <div style={{width:`${fishing.progress}%`,height:"100%",background:fishing.progress<25?"#ff5555":"linear-gradient(90deg,#00aaff,#44ff99)",transition:"width .08s"}}/>
+              </div>
+            </div>
+            <button onMouseDown={pullFishing} onTouchStart={pullFishing} onClick={pullFishing} style={{width:"100%",padding:"11px 0",fontSize:13,fontWeight:800,background:"linear-gradient(135deg,rgba(0,130,220,.55),rgba(0,80,180,.4))",border:"1px solid #00aaff",borderRadius:10,color:"#ccf4ff",cursor:"pointer"}}>
+              🔱 收线 / 稳住游标
+            </button>
+            <div style={{fontSize:9,color:"#4a9ab8",marginTop:7,textAlign:"center"}}>让白色游标停在绿色区域内，进度归零则失败并扣氧气。</div>
           </div>
         )}
 
@@ -1428,17 +1571,17 @@ function DeepCatch(){
                       {/* dish selection — only show if waiting and not already cooking */}
                       {c.status==="waiting"&&!cooking&&(
                         <div>
-                          <div style={{fontSize:9,color:"#3a6a88",marginBottom:5}}>选菜上桌（偏好{c.prefer}星及以上）：</div>
+                          <div style={{fontSize:9,color:"#3a6a88",marginBottom:5}}>客人点单：{c.orderEmoji} {c.orderName}</div>
                           <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
-                            {availDishes.filter(d=>d.taste>=c.prefer&&(inv[d.fishId]||0)>0).slice(0,6).map(d=>(
+                            {availDishes.filter(d=>d.fishId===c.orderFishId&&(inv[d.fishId]||0)>0).map(d=>(
                               <button key={d.id} onClick={()=>serveDish(c.uid,d)}
                                 style={{padding:"5px 8px",fontSize:9,background:"rgba(0,100,200,.3)",border:"1px solid #0055bb",borderRadius:7,color:"#88ccff",cursor:"pointer"}}>
                                 {d.emoji} {d.name}<br/>
                                 <span style={{color:"#ffd700"}}>¥{d.basePrice}</span>
                               </button>
                             ))}
-                            {availDishes.filter(d=>d.taste>=c.prefer&&(inv[d.fishId]||0)>0).length===0&&(
-                              <div style={{fontSize:9,color:"#ff6644"}}>❌ 没有合适的食材！快去潜水！</div>
+                            {availDishes.filter(d=>d.fishId===c.orderFishId&&(inv[d.fishId]||0)>0).length===0&&(
+                              <div style={{fontSize:9,color:"#ff6644"}}>❌ 这道菜刚好卖完了，今晚不会再接这类订单。</div>
                             )}
                           </div>
                         </div>
@@ -1868,7 +2011,7 @@ function DeepCatch(){
           <div>
             <div style={{background:"linear-gradient(135deg,rgba(0,55,120,.3),rgba(0,28,75,.3))",borderRadius:12,padding:12,marginBottom:11,border:"1px solid rgba(0,110,190,.28)"}}>
               <div style={{fontSize:12,fontWeight:700,color:"#00d4ff",marginBottom:3}}>🤖 AI潜水顾问 · 料理大师</div>
-              <div style={{fontSize:10,color:"#4a7a8a",lineHeight:1.7}}>知晓全部状态。问我：水域选择·菜品搭配·装备升级·客人管理·图鉴攻略…</div>
+              <div style={{fontSize:10,color:"#4a7a8a",lineHeight:1.7}}>连接后端顾问后可读取当前游戏状态。问我：水域选择·菜品搭配·装备升级·客人管理·图鉴攻略…</div>
             </div>
             <div style={{maxHeight:260,overflowY:"auto",marginBottom:10}}>
               {aiHist.map((m,i)=>(
@@ -1877,6 +2020,7 @@ function DeepCatch(){
                   <div style={{fontSize:12,lineHeight:1.65,color:"#aacce8"}}>{m.content}</div>
                 </div>
               ))}
+              {aiHist.length===0&&<div style={{textAlign:"center",padding:12,color:"#1e4460"}}>选择下方问题，顾问会立刻给出建议。</div>}
               {aiLoad&&<div style={{textAlign:"center",padding:12,color:"#1e4460",animation:"pulse 1s infinite"}}>🤖 思考中…</div>}
             </div>
             <div style={{display:"flex",gap:7,marginBottom:9}}>
@@ -1884,8 +2028,8 @@ function DeepCatch(){
               <button onClick={askAi} disabled={aiLoad} style={{padding:"10px 14px",background:"rgba(0,100,180,.38)",border:"1px solid #0044cc",borderRadius:9,color:"#00ccff",cursor:"pointer",fontSize:12}}>发送</button>
             </div>
             <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
-              {["去哪潜水最值？","最赚钱菜品？","装备升级顺序？","怎么提升评分？","BOSS怎么打？","图鉴怎么集齐？"].map(q=>(
-                <button key={q} onClick={()=>setAiIn(q)} style={{padding:"5px 9px",fontSize:9,background:"rgba(0,22,65,.42)",border:"1px solid rgba(0,50,110,.3)",borderRadius:15,color:"#4a7a8a",cursor:"pointer"}}>{q}</button>
+              {AI_QUESTIONS.map(q=>(
+                <button key={q} onClick={()=>askAi(q)} style={{padding:"5px 9px",fontSize:9,background:"rgba(0,22,65,.42)",border:"1px solid rgba(0,50,110,.3)",borderRadius:15,color:"#4a7a8a",cursor:"pointer"}}>{q}</button>
               ))}
             </div>
           </div>
