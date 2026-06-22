@@ -13,7 +13,7 @@ function readBody(req) {
     let body = "";
     req.on("data", chunk => {
       body += chunk;
-      if (body.length > 1_000_000) {
+      if (body.length > 2_000_000) {
         reject(new Error("Request body too large"));
         req.destroy();
       }
@@ -74,16 +74,20 @@ module.exports = async function handler(req, res) {
 
     const state = body.state || {};
     const history = Array.isArray(body.history) ? body.history.slice(-8) : [];
+    const agent = body.agent || state.selectedAgent || {};
     const baseUrl = (process.env.OPENAI_BASE_URL || DEFAULT_BASE_URL).replace(/\/+$/, "");
     const model = process.env.OPENAI_MODEL || DEFAULT_MODEL;
 
     const system = [
-      "你是《深海捕手 Deep Catch》的真实内置 AI 顾问，名字叫“深海顾问”。",
+      "你是《深海捕手 Deep Catch》的真实内置 AI 智能体，名字叫“深海顾问”。",
+      `当前赛道：${agent.emoji || "🤖"}${agent.name || "AI游戏总控"}。${agent.prompt || ""}`,
       "你完全根据请求里的当前状态和 gameData 回答，gameData 包含全部鱼类、区域、装备、餐厅升级、员工、任务和节日数据。",
-      "你的职责：给潜水路线、捕鱼目标、餐厅备货、上菜策略、装备升级、任务推进、图鉴收集、BOSS打法和功能提示。",
+      "你的职责：给潜水路线、捕鱼目标、餐厅备货、上菜策略、装备升级、任务推进、图鉴收集、BOSS打法、功能提示、AI+游戏创意玩法和可验证改进方案。",
       "游戏规则重点：夜晚客人只点库存可做的菜；食材卖完或达到接待上限后会自动结束营业；捕鱼进入小游戏，失败扣氧气，小游戏过程不持续耗氧。",
+      "如果玩家问创意玩法，参考智创游戏方向：强调AI+游戏交互创新、体验升级、角色扮演、策略对抗、动态剧情。",
+      "如果玩家问问题解决，参考智解真问题方向：强调问题真实、效果可验证、成果可部署、可推广。",
       "回答必须像游戏内顾问：简短、具体、可执行。优先给下一步行动。不要说你看不到游戏数据，不要编造不存在的 UI 或功能。",
-      "中文回答。普通问题 120 字以内；如果玩家要求详细攻略，最多 260 字。"
+      "中文回答。普通问题 160 字以内；如果玩家要求详细攻略，最多 300 字。"
     ].join("\n");
 
     const payload = {
