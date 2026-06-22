@@ -2153,7 +2153,6 @@ function DeepCatch() {
   const [aiHist, setAiHist] = useState([]);
   const [aiIn, setAiIn] = useState("");
   const [aiLoad, setAiLoad] = useState(false);
-  const [aiMode, setAiMode] = useState("director");
   const diveRef = useRef(null);
   diveRef.current = dive;
   const fishingRef = useRef(null);
@@ -2329,12 +2328,16 @@ function DeepCatch() {
     const t = setInterval(() => {
       setFishing(g => {
         if (!g) return g;
-        const nextTarget = g.target + g.dir * (0.45 + g.difficulty / 70);
-        const dir = nextTarget > 82 ? -1 : nextTarget < 18 ? 1 : g.dir;
-        const target = Math.max(14, Math.min(86, nextTarget));
-        const cursor = g.cursor + (50 - g.cursor) * 0.04;
+        const now = Date.now();
+        const nextTarget = g.target + g.dir * g.targetSpeed + (Math.random() - .5) * g.jitter;
+        const dir = nextTarget > 88 ? -1 : nextTarget < 12 ? 1 : g.dir;
+        const target = Math.max(10, Math.min(90, nextTarget));
+        const cursor = g.cursor + (50 - g.cursor) * g.drift;
         const distance = Math.abs(cursor - target);
-        const progress = Math.max(0, Math.min(100, g.progress + (distance < 30 ? 4.2 : -0.42 - g.difficulty / 130)));
+        const locked = now < (g.lockUntil || 0);
+        const good = distance < g.hitWindow;
+        const delta = locked && good ? g.lockPower : -(good ? g.decay * 0.45 : g.decay);
+        const progress = Math.max(0, Math.min(100, g.progress + delta));
         if (progress >= 100) {
           setTimeout(() => finishFishing(true), 0);
           return {
@@ -2360,7 +2363,9 @@ function DeepCatch() {
           target,
           cursor,
           dir,
-          progress
+          progress,
+          locked,
+          good
         };
       });
     }, 80);
@@ -2369,7 +2374,8 @@ function DeepCatch() {
   const pullFishing = () => {
     setFishing(g => g ? {
       ...g,
-      cursor: Math.max(4, g.cursor - 10)
+      cursor: Math.max(4, g.cursor - g.pullStep),
+      lockUntil: Date.now() + g.lockMs
     } : g);
   };
 
@@ -2737,8 +2743,17 @@ function DeepCatch() {
       }));
       return;
     }
+    const harpoon = eq("harpoon");
     const catchBonus = hasS("w7") ? 8 : 0;
-    const baseDifficulty = 10 + fish.q * 4 + (fish.ag ? 4 : 0) + (isBossFish(fish) ? 8 : 0) - Math.floor(eq("harpoon").rate * 14) - catchBonus - Math.floor(festCatchBonus * 100);
+    const equipSkill = Math.floor(harpoon.rate * 24) + catchBonus + Math.floor(festCatchBonus * 100);
+    const rarity = fish.rare ? 8 : 0;
+    const boss = isBossFish(fish) ? 12 : 0;
+    const baseDifficulty = 14 + fish.q * 7 + (fish.ag ? 6 : 0) + rarity + boss - equipSkill;
+    const difficulty = Math.max(8, Math.min(58, baseDifficulty));
+    const hitWindow = Math.max(10, Math.min(30, 32 - difficulty * 0.32 + harpoon.rate * 9));
+    const targetSpeed = Math.min(2.2, 0.42 + difficulty / 42 + (fish.rare ? 0.18 : 0) + (fish.ag ? 0.18 : 0));
+    const lockPower = Math.max(2.0, 5.1 - difficulty / 24 + harpoon.rate * 1.5);
+    const decay = Math.min(2.2, 0.55 + difficulty / 48 + (fish.rare ? 0.25 : 0) + (fish.ag ? 0.15 : 0));
     setFishing({
       fishUid: fish.uid,
       fishId: fish.id,
@@ -2746,11 +2761,22 @@ function DeepCatch() {
       emoji: fish.e,
       weight: fish.w,
       xp: fish.xp,
-      progress: 65,
+      progress: 38,
       cursor: 50,
-      target: 38 + Math.random() * 24,
+      target: 36 + Math.random() * 28,
       dir: Math.random() > .5 ? 1 : -1,
-      difficulty: Math.max(5, Math.min(26, baseDifficulty)),
+      difficulty,
+      hitWindow,
+      targetSpeed,
+      lockPower,
+      decay,
+      jitter: fish.q >= 4 ? .6 : .35,
+      drift: Math.max(.035, .07 - harpoon.rate * .025),
+      pullStep: Math.max(5, 11 - difficulty / 12 + harpoon.rate * 5),
+      lockMs: fish.q >= 4 || fish.rare ? 230 : 280,
+      lockUntil: 0,
+      locked: false,
+      good: false,
       o2Penalty: Math.max(3, Math.floor((fish.dmg || fish.q * 3) * (fish.ag ? 1.0 : 0.55) + fish.q)),
       rare: fish.rare,
       ag: fish.ag
@@ -3021,7 +3047,7 @@ function DeepCatch() {
   };
   const AI_AGENTS = {
     director: {
-      name: "智创游戏",
+      name: "玩法建议",
       emoji: "🎮",
       desc: "把 AI 融进玩法，设计新事件、挑战和角色互动",
       prompt: "你是游戏创意导演，重点提出有趣、可玩的 AI+游戏机制，给出可立即执行的玩法建议。"
@@ -3051,13 +3077,13 @@ function DeepCatch() {
       prompt: "你是动态事件编剧，重点生成贴合当前状态的短任务、剧情钩子、奖励和风险。"
     },
     critic: {
-      name: "智评测",
+      name: "经营复盘",
       emoji: "🏅",
-      desc: "像比赛评委一样检查问题真实、效果可验证、能部署",
-      prompt: "你是作品评委，按问题真实、效果可验证、成果可部署、可推广来指出当前方案短板和改进。"
+      desc: "检查当前经营和下潜风险",
+      prompt: "你是游戏内顾问，只回答玩家当前玩法问题。"
     }
   };
-  const AI_QUESTIONS = ["生成今日AI任务", "今晚怎么营业最稳？", "去哪潜水收益最高？", "库存如何配菜？", "下一步升级什么？", "设计一个新奇AI事件", "BOSS和稀有鱼怎么抓？", "按比赛标准评测我的作品"];
+  const AI_QUESTIONS = ["现在最该做什么？", "怎么抓鱼更稳？", "今晚怎么营业？", "库存够不够开店？", "先升级什么装备？", "去哪片海域收益高？", "氧气不多怎么办？", "怎么刷图鉴？", "稀有鱼/BOSS怎么处理？", "给我一个今日目标"];
   const getAdvisorState = () => ({
     gold,
     level,
@@ -3131,24 +3157,23 @@ function DeepCatch() {
     })).slice(0, 8),
     selectedAgent: AI_AGENTS[aiMode],
     fishingRule: "捕捉会进入鱼枪抓捕小游戏；小游戏过程中不持续消耗氧气；失败扣氧气。夜晚客人只点库存可做的菜，卖完或达接待上限会自动打烊。",
-    contestDirection: "参考智创游戏与智解真问题方向：强调AI+游戏交互创新、问题真实、效果可验证、成果可部署。"
+    contestDirection: "参考玩法建议与智解真问题方向：强调AI+游戏交互创新、问题真实、效果可验证、成果可部署。"
   });
   const localAdvisorAnswer = msg => {
-    const agent = AI_AGENTS[aiMode] || AI_AGENTS.director;
     const stock = Object.entries(inv).filter(([, n]) => n > 0).sort((a, b) => (FISH[b[0]]?.basePrice || FISH[b[0]]?.v || 0) - (FISH[a[0]]?.basePrice || FISH[a[0]]?.v || 0));
     const topStock = stock.slice(0, 3).map(([id, n]) => `${FISH[id]?.n || id}×${n}`).join("、") || "暂无库存";
     const bestDish = stock[0] ? FISH[stock[0][0]] : null;
     const openTables = customers.filter(c => c.status === "waiting" || c.status === "eating").length;
-    if (msg.includes("AI任务") || msg.includes("事件")) return `【${agent.emoji}${agent.name}】今日事件：声呐发现异常鱼群。白天去${ZONES[selZone]?.name || "当前水域"}用鱼枪抓2种不同食材；夜晚优先卖${bestDish?.cook || "库存最高价菜"}。验证目标：今晚营收超过¥${Math.max(800, restLv * 900)}。`;
-    if (msg.includes("比赛") || msg.includes("评测")) return `评测结论：作品亮点是“AI智能体会读取库存、阶段、装备和经营状态”。建议展示三项可验证成果：缺货率下降、鱼枪捕获成功率提升、夜间自动打烊不卡住。当前可展示数据：库存${topStock}，图鉴${codexCount}/${Object.keys(FISH).length}。`;
+    if (msg.includes("目标") || msg.includes("任务") || msg.includes("今天")) return `今日目标：白天去${ZONES[selZone]?.name || "当前水域"}带回3条以上可做菜的鱼，顺手补1个新图鉴；晚上优先卖${bestDish?.cook || "最高价库存菜"}，目标营收¥${Math.max(800, restLv * 900)}。`;
+    
     if (msg.includes("潜水") || msg.includes("去哪")) return `当前${phase === "day" ? "白天" : "夜晚"}，装备允许时优先选高价值水域；现在建议去${ZONES[selZone]?.name || "珊瑚礁"}补货。若装载箱快满就上浮，别贪稀有鱼；今晚菜单先围绕${bestDish?.n || "已有鱼"}做。`;
     if (msg.includes("赚钱") || msg.includes("菜品") || msg.includes("配菜") || msg.includes("库存")) return `库存扫描：${topStock}。建议把${bestDish?.n || "最高价鱼"}留给夜晚做${bestDish?.cook || "主菜"}；低价鱼用于稳定接待。库存少于3条时别开长夜，卖完会自动打烊。`;
     if (msg.includes("装备") || msg.includes("升级")) return `升级路线：先装载箱，再氧气瓶，再潜水服。理由：装载决定每次下潜收益，氧气决定容错，潜水服解锁高价值区域。当前金币¥${gold.toLocaleString()}，不足时先刷浅海稳定鱼。`;
     if (msg.includes("评分") || msg.includes("营业") || msg.includes("客人")) return `经营判断：当前在店${openTables}桌，今晚已接待${nightServeCount}/${NIGHT_CUSTOMER_LIMIT}。客人只会点库存菜；别手动清空库存。评分要稳，就先保证3条以上可做食材再营业。`;
-    if (msg.includes("BOSS") || msg.includes("稀有")) return `稀有鱼策略：氧气低于35%别挑战；先用枪械削血，再鱼枪抓捕。鱼枪小游戏命中区已放宽，按“鱼枪锁定”让瞄准线贴近绿色区即可。失败只扣一次氧气。`;
+    if (msg.includes("BOSS") || msg.includes("稀有")) return `稀有鱼/BOSS策略：氧气低于35%别挑战；高星、稀有、攻击性鱼的命中区更窄、移动更快。先升级鱼叉提高容错，有枪械时先削血，再进入鱼枪抓捕。`;
     if (msg.includes("图鉴")) return `图鉴路线：每次下潜换一个深度，优先拍保护动物、抓未发现鱼。节日当天查地图加成，稀有鱼等氧气和装载升级后再追。当前图鉴${codexCount}/${Object.keys(FISH).length}。`;
-    if (msg.includes("捕鱼") || msg.includes("抓鱼") || msg.includes("鱼枪")) return "鱼枪抓捕提示：绿色区域是命中区，白线是瞄准线。连续点“鱼枪锁定”把白线压进命中区，锁定条满就捕获；容错已提高，失败只扣一次氧气。";
-    return `【${agent.emoji}${agent.name}】态势判断：${phase === "day" ? "先潜水补货" : "优先快速上菜"}。当前库存：${topStock}。我建议下一步：${phase === "day" ? "抓2-4条可做菜的鱼再开店" : "把最高价库存菜先卖掉，避免客人等待"}。`;
+    if (msg.includes("捕鱼") || msg.includes("抓鱼") || msg.includes("鱼枪")) return "鱼枪抓捕提示：必须主动点击“鱼枪锁定”才会涨条；白色瞄准线靠近绿色命中区时涨条，偏离或停手都会掉条。鱼越稀有、星级越高、攻击性越强，命中区越窄、移动越快；鱼叉越好越稳。";
+    return `当前判断：${phase === "day" ? "先潜水补货" : "先处理餐厅订单"}。当前库存：${topStock}。下一步建议：${phase === "day" ? "抓3条以上能做菜的鱼，再考虑挑战稀有鱼" : "优先给等待中的客人上菜，库存卖完会自动打烊"}。`;
   };
   const askAi = async (preset = null) => {
     if (aiLoad) return;
@@ -3547,13 +3572,13 @@ function DeepCatch() {
         position: "absolute",
         left: `${fishing.target}%`,
         top: 10,
-        width: 54,
+        width: `${fishing.hitWindow * 2}%`,
         height: 66,
-        marginLeft: -27,
+        marginLeft: `-${fishing.hitWindow}%`,
         borderRadius: 10,
-        background: "rgba(80,255,160,.24)",
-        border: "1px solid #44ee99",
-        boxShadow: "0 0 20px rgba(80,255,160,.28)"
+        background: fishing.good ? "rgba(80,255,160,.34)" : "rgba(80,255,160,.18)",
+        border: `1px solid ${fishing.good ? "#66ffaa" : "#44ee99"}`,
+        boxShadow: fishing.good ? "0 0 24px rgba(80,255,160,.45)" : "0 0 16px rgba(80,255,160,.2)"
       }
     }), /*#__PURE__*/React.createElement("div", {
       style: {
@@ -3564,8 +3589,8 @@ function DeepCatch() {
         height: 74,
         marginLeft: -2.5,
         borderRadius: 4,
-        background: "#fff",
-        boxShadow: "0 0 14px #00d4ff"
+        background: fishing.locked ? "#ccffff" : "#fff",
+        boxShadow: fishing.locked ? "0 0 18px #66ffff" : "0 0 12px #00d4ff"
       }
     }), /*#__PURE__*/React.createElement("div", {
       style: {
@@ -3587,18 +3612,21 @@ function DeepCatch() {
       }
     }))), /*#__PURE__*/React.createElement("button", {
       onMouseDown: pullFishing,
-      onTouchStart: pullFishing,
-      onClick: pullFishing,
+      onTouchStart: e => {
+        e.preventDefault();
+        pullFishing();
+      },
       style: {
         width: "100%",
         padding: "11px 0",
         fontSize: 13,
         fontWeight: 800,
-        background: "linear-gradient(135deg,rgba(0,130,220,.55),rgba(0,80,180,.4))",
+        background: fishing.locked ? "linear-gradient(135deg,rgba(0,190,220,.62),rgba(0,105,210,.45))" : "linear-gradient(135deg,rgba(0,130,220,.55),rgba(0,80,180,.4))",
         border: "1px solid #00aaff",
         borderRadius: 10,
         color: "#ccf4ff",
-        cursor: "pointer"
+        cursor: "pointer",
+        touchAction: "none"
       }
     }, "\uD83D\uDD31 \u9C7C\u67AA\u9501\u5B9A / \u7A33\u4F4F\u7784\u51C6"), /*#__PURE__*/React.createElement("div", {
       style: {
@@ -3607,7 +3635,7 @@ function DeepCatch() {
         marginTop: 7,
         textAlign: "center"
       }
-    }, "\u8FDE\u7EED\u70B9\u51FB\u8BA9\u767D\u8272\u7784\u51C6\u7EBF\u9760\u8FD1\u7EFF\u8272\u547D\u4E2D\u533A\uFF0C\u9501\u5B9A\u6761\u6EE1\u5C31\u6293\u83B7\uFF1B\u5931\u8D25\u53EA\u6263\u4E00\u6B21\u6C27\u6C14\u3002")), curFestival && /*#__PURE__*/React.createElement("div", {
+    }, "\u5FC5\u987B\u70B9\u51FB\u9C7C\u67AA\u9501\u5B9A\u624D\u4F1A\u63A8\u8FDB\uFF1B\u767D\u8272\u7784\u51C6\u7EBF\u8D34\u8FD1\u7EFF\u8272\u547D\u4E2D\u533A\u65F6\u6DA8\u6761\uFF0C\u504F\u79BB\u6216\u505C\u624B\u4F1A\u6389\u6761\u3002")), curFestival && /*#__PURE__*/React.createElement("div", {
       style: {
         background: `${curFestival.color}18`,
         border: `1px solid ${curFestival.color}44`,
@@ -5748,13 +5776,13 @@ function DeepCatch() {
       color: "#00d4ff",
       marginBottom: 3
     }
-  }, "\uD83E\uDD16 \u6DF1\u6D77\u667A\u80FD\u4F53 \xB7 \u6E38\u620F\u603B\u63A7"), /*#__PURE__*/React.createElement("div", {
+  }, "\uD83E\uDD16 \u6DF1\u6D77\u987E\u95EE \xB7 \u6E38\u620F\u52A9\u624B"), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 10,
       color: "#4a7a8a",
       lineHeight: 1.7
     }
-  }, "\u987E\u95EE\u4F1A\u8BFB\u53D6\u5F53\u524D\u9636\u6BB5\u3001\u5E93\u5B58\u3001\u5BA2\u4EBA\u3001\u88C5\u5907\u3001\u91D1\u5E01\u3001\u56FE\u9274\u548C\u6C34\u57DF\u4FE1\u606F\uFF0C\u7ED9\u51FA\u7ECF\u8425\u3001\u6293\u6355\u3001\u5347\u7EA7\u4E0E\u4F5C\u54C1\u8BC4\u6D4B\u5EFA\u8BAE\u3002")), advisorTips.length > 0 && /*#__PURE__*/React.createElement("div", {
+  }, "\u987E\u95EE\u4F1A\u8BFB\u53D6\u5F53\u524D\u9636\u6BB5\u3001\u5E93\u5B58\u3001\u5BA2\u4EBA\u3001\u88C5\u5907\u3001\u91D1\u5E01\u3001\u56FE\u9274\u548C\u6C34\u57DF\u4FE1\u606F\uFF0C\u53EA\u56DE\u7B54\u7ECF\u8425\u3001\u6F5C\u6C34\u3001\u6293\u9C7C\u3001\u5347\u7EA7\u548C\u8DEF\u7EBF\u95EE\u9898\u3002")), advisorTips.length > 0 && /*#__PURE__*/React.createElement("div", {
     style: {
       background: "rgba(0,18,42,.62)",
       border: "1px solid rgba(0,105,170,.34)",
@@ -5780,35 +5808,16 @@ function DeepCatch() {
     }
   }, tip))), /*#__PURE__*/React.createElement("div", {
     style: {
-      display: "grid",
-      gridTemplateColumns: "1fr 1fr",
-      gap: 7,
-      marginBottom: 10
+      background: "rgba(0,12,32,.5)",
+      border: "1px solid rgba(0,70,130,.28)",
+      borderRadius: 10,
+      padding: 10,
+      marginBottom: 10,
+      fontSize: 10,
+      color: "#5f9fc0",
+      lineHeight: 1.55
     }
-  }, Object.entries(AI_AGENTS).map(([id, a]) => /*#__PURE__*/React.createElement("button", {
-    key: id,
-    onClick: () => setAiMode(id),
-    style: {
-      textAlign: "left",
-      padding: "8px 9px",
-      borderRadius: 9,
-      border: `1px solid ${aiMode === id ? "#00d4ff" : "rgba(0,70,130,.35)"}`,
-      background: aiMode === id ? "rgba(0,110,190,.28)" : "rgba(0,18,50,.42)",
-      color: aiMode === id ? "#cceeff" : "#4a7a8a",
-      cursor: "pointer"
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 11,
-      fontWeight: 800
-    }
-  }, a.emoji, " ", a.name), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 8,
-      lineHeight: 1.35,
-      marginTop: 2
-    }
-  }, a.desc)))), /*#__PURE__*/React.createElement("div", {
+  }, "顾问已合并为一个游戏内助手，会根据库存、下潜、抓鱼、装备和餐厅状态给建议。"), /*#__PURE__*/React.createElement("div", {
     style: {
       maxHeight: 260,
       overflowY: "auto",
