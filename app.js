@@ -1,3 +1,4 @@
+function _extends() { _extends = Object.assign ? Object.assign.bind() : function (target) { for (var i = 1; i < arguments.length; i++) { var source = arguments[i]; for (var key in source) { if (Object.prototype.hasOwnProperty.call(source, key)) { target[key] = source[key]; } } } return target; }; return _extends.apply(this, arguments); }
 const {
   useState,
   useEffect,
@@ -2157,6 +2158,7 @@ function DeepCatch() {
   diveRef.current = dive;
   const fishingRef = useRef(null);
   fishingRef.current = fishing;
+  const fishCtrlRef = useRef(0);
   const custRef = useRef(null);
   custRef.current = customers;
   const cookRef = useRef(null);
@@ -2328,15 +2330,27 @@ function DeepCatch() {
     const t = setInterval(() => {
       setFishing(g => {
         if (!g) return g;
-        const now = Date.now();
-        const nextTarget = g.target + g.dir * g.targetSpeed + (Math.random() - .5) * g.jitter;
-        const dir = nextTarget > 88 ? -1 : nextTarget < 12 ? 1 : g.dir;
-        const target = Math.max(10, Math.min(90, nextTarget));
-        const cursor = g.cursor + (50 - g.cursor) * g.drift;
+        const nextTurn = Math.max(0, (g.turn || 0) - 1);
+        let dir = g.dir;
+        if (nextTurn <= 0 || Math.random() < g.turnChance) dir = Math.random() > .5 ? 1 : -1;
+        let velocity = (Number.isFinite(g.velocity) ? g.velocity : 0) * 0.82 + dir * g.targetAccel + (Math.random() - .5) * g.jitter;
+        velocity = Math.max(-g.targetMaxSpeed, Math.min(g.targetMaxSpeed, velocity));
+        let target = g.target + velocity;
+        if (target > 92) {
+          target = 92;
+          dir = -1;
+          velocity = -Math.abs(velocity) * 0.7;
+        }
+        if (target < 8) {
+          target = 8;
+          dir = 1;
+          velocity = Math.abs(velocity) * 0.7;
+        }
+        const cursor = Math.max(4, Math.min(96, g.cursor + fishCtrlRef.current * g.cursorSpeed));
         const distance = Math.abs(cursor - target);
-        const locked = now < (g.lockUntil || 0);
         const good = distance < g.hitWindow;
-        const delta = locked && good ? g.lockPower : -(good ? g.decay * 0.45 : g.decay);
+        const active = fishCtrlRef.current !== 0;
+        const delta = active && good ? g.lockPower : -(good ? g.decay * 0.45 : g.decay);
         const progress = Math.max(0, Math.min(100, g.progress + delta));
         if (progress >= 100) {
           setTimeout(() => finishFishing(true), 0);
@@ -2363,21 +2377,65 @@ function DeepCatch() {
           target,
           cursor,
           dir,
+          velocity,
+          turn: nextTurn <= 0 ? g.turnEvery : nextTurn,
           progress,
-          locked,
+          active,
           good
         };
       });
     }, 80);
     return () => clearInterval(t);
   }, [fishing, screen]);
-  const pullFishing = () => {
+  const steerFishing = dir => {
+    fishCtrlRef.current = dir;
     setFishing(g => g ? {
       ...g,
-      cursor: Math.max(4, g.cursor - g.pullStep),
-      lockUntil: Date.now() + g.lockMs
+      cursor: Math.max(4, Math.min(96, g.cursor + dir * g.tapStep)),
+      active: true
     } : g);
   };
+  const stopFishing = () => {
+    fishCtrlRef.current = 0;
+    setFishing(g => g ? {
+      ...g,
+      active: false
+    } : g);
+  };
+  const pullFishing = () => steerFishing(-1);
+  const pushFishing = () => steerFishing(1);
+  const ctrlProps = dir => ({
+    onMouseDown: e => {
+      e.preventDefault();
+      steerFishing(dir);
+    },
+    onMouseUp: stopFishing,
+    onMouseLeave: stopFishing,
+    onTouchStart: e => {
+      e.preventDefault();
+      steerFishing(dir);
+    },
+    onTouchEnd: e => {
+      e.preventDefault();
+      stopFishing();
+    },
+    onClick: e => {
+      e.preventDefault();
+      steerFishing(dir);
+      setTimeout(stopFishing, 90);
+    }
+  });
+  useEffect(() => {
+    const up = () => {
+      fishCtrlRef.current = 0;
+    };
+    window.addEventListener("mouseup", up);
+    window.addEventListener("touchcancel", up);
+    return () => {
+      window.removeEventListener("mouseup", up);
+      window.removeEventListener("touchcancel", up);
+    };
+  }, []);
 
   // ── RESTAURANT live tick: customer patience & cook timer ──
   useEffect(() => {
@@ -2723,10 +2781,7 @@ function DeepCatch() {
       setDive(p => ({
         ...p,
         dlog: [`📷 ${fish.n}是保护动物！拍照 +${fish.xp}XP`, ...p.dlog],
-        fish: p.fish.map(f => f.uid === fish.uid ? {
-          ...f,
-          caught: true
-        } : f),
+        fish: p.fish.filter(f => f.uid !== fish.uid),
         caughtMap: {
           ...p.caughtMap,
           [fish.id]: (p.caughtMap[fish.id] || 0) + 1
@@ -2744,16 +2799,17 @@ function DeepCatch() {
       return;
     }
     const harpoon = eq("harpoon");
-    const catchBonus = hasS("w7") ? 8 : 0;
-    const equipSkill = Math.floor(harpoon.rate * 24) + catchBonus + Math.floor(festCatchBonus * 100);
-    const rarity = fish.rare ? 8 : 0;
-    const boss = isBossFish(fish) ? 12 : 0;
-    const baseDifficulty = 14 + fish.q * 7 + (fish.ag ? 6 : 0) + rarity + boss - equipSkill;
-    const difficulty = Math.max(8, Math.min(58, baseDifficulty));
-    const hitWindow = Math.max(10, Math.min(30, 32 - difficulty * 0.32 + harpoon.rate * 9));
-    const targetSpeed = Math.min(2.2, 0.42 + difficulty / 42 + (fish.rare ? 0.18 : 0) + (fish.ag ? 0.18 : 0));
-    const lockPower = Math.max(2.0, 5.1 - difficulty / 24 + harpoon.rate * 1.5);
-    const decay = Math.min(2.2, 0.55 + difficulty / 48 + (fish.rare ? 0.25 : 0) + (fish.ag ? 0.15 : 0));
+    const catchBonus = hasS("w7") ? 6 : 0;
+    const fishPower = fish.q * 9 + (fish.rare ? 10 : 0) + (fish.ag ? 7 : 0) + (isBossFish(fish) ? 14 : 0);
+    const equipPower = harpoon.rate * 26 + catchBonus + festCatchBonus * 80;
+    const difficulty = Math.max(8, Math.min(62, fishPower + 8 - equipPower));
+    const hitWindow = Math.max(8, Math.min(28, 28 - difficulty * 0.22 + harpoon.rate * 7));
+    const targetMaxSpeed = Math.max(.72, Math.min(2.7, .58 + fishPower / 34));
+    const targetAccel = Math.max(.10, Math.min(.34, .08 + fishPower / 160));
+    const cursorSpeed = Math.max(1.35, Math.min(3.7, 1.15 + harpoon.rate * 2.15 + catchBonus * .06));
+    const tapStep = cursorSpeed * 1.55;
+    const lockPower = Math.max(1.55, Math.min(4.2, 2.4 + harpoon.rate * 1.25 - difficulty / 55));
+    const decay = Math.max(.45, Math.min(1.65, .52 + difficulty / 70));
     setFishing({
       fishUid: fish.uid,
       fishId: fish.id,
@@ -2767,15 +2823,18 @@ function DeepCatch() {
       dir: Math.random() > .5 ? 1 : -1,
       difficulty,
       hitWindow,
-      targetSpeed,
       lockPower,
       decay,
-      jitter: fish.q >= 4 ? .6 : .35,
-      drift: Math.max(.035, .07 - harpoon.rate * .025),
-      pullStep: Math.max(5, 11 - difficulty / 12 + harpoon.rate * 5),
-      lockMs: fish.q >= 4 || fish.rare ? 230 : 280,
-      lockUntil: 0,
-      locked: false,
+      targetMaxSpeed,
+      targetAccel,
+      cursorSpeed,
+      tapStep,
+      velocity: 0,
+      jitter: Math.max(.08, Math.min(.46, .08 + fishPower / 150)),
+      turnEvery: Math.max(10, Math.floor(28 - fishPower / 3)),
+      turn: 8 + Math.floor(Math.random() * 10),
+      turnChance: Math.max(.015, Math.min(.08, .015 + fishPower / 900)),
+      active: false,
       good: false,
       o2Penalty: Math.max(3, Math.floor((fish.dmg || fish.q * 3) * (fish.ag ? 1.0 : 0.55) + fish.q)),
       rare: fish.rare,
@@ -2803,10 +2862,7 @@ function DeepCatch() {
       if (festPriceMult > 1) logs.push(`🎉 节日加成·价值×${festPriceMult}！`);
       setDive(p => ({
         ...p,
-        fish: p.fish.map(f => f.uid === game.fishUid ? {
-          ...f,
-          caught: true
-        } : f),
+        fish: p.fish.filter(f => f.uid !== game.fishUid),
         caughtMap: nm,
         cargo: p.cargo + game.weight,
         dlog: [...logs, ...p.dlog]
@@ -2820,10 +2876,7 @@ function DeepCatch() {
         const newO2 = Math.max(0, p.o2 - o2dmg);
         const fled = {
           ...p,
-          fish: p.fish.map(f => f.uid === game.fishUid ? {
-            ...f,
-            fled: true
-          } : f),
+          fish: p.fish.filter(f => f.uid !== game.fishUid),
           o2: newO2,
           dlog: [...logs, ...p.dlog]
         };
@@ -2863,11 +2916,7 @@ function DeepCatch() {
       };
       setDive(p => ({
         ...p,
-        fish: p.fish.map(f => f.uid === fish.uid ? {
-          ...f,
-          caught: true,
-          curHp: 0
-        } : f),
+        fish: p.fish.filter(f => f.uid !== fish.uid),
         caughtMap: nm,
         cargo: p.cargo + fish.w,
         dlog: [`💀 击杀${fish.n}！+${fish.xp * 2}XP 弹药剩${newAmmo}`, ...p.dlog]
@@ -3045,45 +3094,12 @@ function DeepCatch() {
     if (u.effect === "extra") addLog("🛵 外卖系统开通！夜晚客流量增加");
     addLog(`✨ 购买餐厅升级：${u.name}！`);
   };
-  const AI_AGENTS = {
-    director: {
-      name: "玩法建议",
-      emoji: "🎮",
-      desc: "把 AI 融进玩法，设计新事件、挑战和角色互动",
-      prompt: "你是游戏创意导演，重点提出有趣、可玩的 AI+游戏机制，给出可立即执行的玩法建议。"
-    },
-    operator: {
-      name: "智解经营",
-      emoji: "🏮",
-      desc: "解决餐厅卡顿、库存、客流、收益和评分问题",
-      prompt: "你是餐厅经营分析师，重点解决库存、上菜、收益、评分、接待节奏和自动打烊。"
-    },
-    diver: {
-      name: "智潜攻略",
-      emoji: "🤿",
-      desc: "规划潜水路线、捕鱼目标、氧气风险和图鉴收集",
-      prompt: "你是潜水教练，重点规划水域、深度、目标鱼、氧气、装载和捕鱼小游戏风险。"
-    },
-    builder: {
-      name: "智造升级",
-      emoji: "🛠️",
-      desc: "给装备、员工、餐厅升级顺序和任务推进方案",
-      prompt: "你是成长路线规划师，重点给金币怎么花、装备怎么升、员工怎么雇、任务怎么推进。"
-    },
-    event: {
-      name: "智生事件",
-      emoji: "✨",
-      desc: "根据当前天数、节日和库存生成故事任务",
-      prompt: "你是动态事件编剧，重点生成贴合当前状态的短任务、剧情钩子、奖励和风险。"
-    },
-    critic: {
-      name: "经营复盘",
-      emoji: "🏅",
-      desc: "检查当前经营和下潜风险",
-      prompt: "你是游戏内顾问，只回答玩家当前玩法问题。"
-    }
+  const ADVISOR_PROFILE = {
+    name: "深海顾问",
+    emoji: "🤖",
+    desc: "读取阶段、库存、装备、客人和图鉴状态，给出下一步玩法建议"
   };
-  const AI_QUESTIONS = ["现在最该做什么？", "怎么抓鱼更稳？", "今晚怎么营业？", "库存够不够开店？", "先升级什么装备？", "去哪片海域收益高？", "氧气不多怎么办？", "怎么刷图鉴？", "稀有鱼/BOSS怎么处理？", "给我一个今日目标"];
+  const AI_QUESTIONS = ["现在最该做什么？", "今晚怎么营业最稳？", "去哪潜水收益最高？", "库存如何配菜？", "下一步升级什么？", "鱼枪怎么更容易命中？", "BOSS和稀有鱼怎么抓？", "图鉴怎么收集更快？", "我快没氧气了怎么办？", "帮我安排今天路线"];
   const getAdvisorState = () => ({
     gold,
     level,
@@ -3119,61 +3135,31 @@ function DeepCatch() {
     })).slice(0, 40),
     codexCount: Object.keys(codex).length,
     totalFish: Object.keys(FISH).length,
-    gameData: {
-      zones: Object.values(ZONES).map(z => ({
-        id: z.id,
-        name: z.name,
-        depths: z.depths,
-        minSuit: z.minSuit,
-        cost: z.cost,
-        desc: z.desc
-      })),
-      fish: Object.entries(FISH).map(([id, f]) => ({
-        id,
-        name: f.n,
-        zone: f.z,
-        depth: f.d,
-        weight: f.w,
-        value: f.v,
-        xp: f.xp,
-        quality: f.q,
-        aggressive: f.ag,
-        protected: f.prot,
-        cook: f.cook || "",
-        price: f.basePrice || 0,
-        taste: f.taste || 0,
-        desc: f.desc
-      })),
-      equipment: EQUIP,
-      restaurantUpgrades: REST_UPGRADES,
-      staff: STAFF,
-      quests: QUEST_POOL,
-      festivals: FESTIVALS
-    },
     activeCustomers: customers.filter(c => c.status === "waiting" || c.status === "eating").map(c => ({
       type: c.name,
       order: c.orderName,
       status: c.status
     })).slice(0, 8),
-    selectedAgent: AI_AGENTS[aiMode],
-    fishingRule: "捕捉会进入鱼枪抓捕小游戏；小游戏过程中不持续消耗氧气；失败扣氧气。夜晚客人只点库存可做的菜，卖完或达接待上限会自动打烊。",
-    contestDirection: "参考玩法建议与智解真问题方向：强调AI+游戏交互创新、问题真实、效果可验证、成果可部署。"
+    selectedAgent: ADVISOR_PROFILE,
+    fishingRule: "捕捉会进入鱼枪抓捕小游戏；小游戏过程中不持续消耗氧气；失败扣氧气。夜晚客人只点库存可做的菜，卖完或达接待上限会自动打烊。"
   });
   const localAdvisorAnswer = msg => {
+    const agent = ADVISOR_PROFILE;
     const stock = Object.entries(inv).filter(([, n]) => n > 0).sort((a, b) => (FISH[b[0]]?.basePrice || FISH[b[0]]?.v || 0) - (FISH[a[0]]?.basePrice || FISH[a[0]]?.v || 0));
     const topStock = stock.slice(0, 3).map(([id, n]) => `${FISH[id]?.n || id}×${n}`).join("、") || "暂无库存";
     const bestDish = stock[0] ? FISH[stock[0][0]] : null;
     const openTables = customers.filter(c => c.status === "waiting" || c.status === "eating").length;
-    if (msg.includes("目标") || msg.includes("任务") || msg.includes("今天")) return `今日目标：白天去${ZONES[selZone]?.name || "当前水域"}带回3条以上可做菜的鱼，顺手补1个新图鉴；晚上优先卖${bestDish?.cook || "最高价库存菜"}，目标营收¥${Math.max(800, restLv * 900)}。`;
-    
-    if (msg.includes("潜水") || msg.includes("去哪")) return `当前${phase === "day" ? "白天" : "夜晚"}，装备允许时优先选高价值水域；现在建议去${ZONES[selZone]?.name || "珊瑚礁"}补货。若装载箱快满就上浮，别贪稀有鱼；今晚菜单先围绕${bestDish?.n || "已有鱼"}做。`;
-    if (msg.includes("赚钱") || msg.includes("菜品") || msg.includes("配菜") || msg.includes("库存")) return `库存扫描：${topStock}。建议把${bestDish?.n || "最高价鱼"}留给夜晚做${bestDish?.cook || "主菜"}；低价鱼用于稳定接待。库存少于3条时别开长夜，卖完会自动打烊。`;
-    if (msg.includes("装备") || msg.includes("升级")) return `升级路线：先装载箱，再氧气瓶，再潜水服。理由：装载决定每次下潜收益，氧气决定容错，潜水服解锁高价值区域。当前金币¥${gold.toLocaleString()}，不足时先刷浅海稳定鱼。`;
-    if (msg.includes("评分") || msg.includes("营业") || msg.includes("客人")) return `经营判断：当前在店${openTables}桌，今晚已接待${nightServeCount}/${NIGHT_CUSTOMER_LIMIT}。客人只会点库存菜；别手动清空库存。评分要稳，就先保证3条以上可做食材再营业。`;
-    if (msg.includes("BOSS") || msg.includes("稀有")) return `稀有鱼/BOSS策略：氧气低于35%别挑战；高星、稀有、攻击性鱼的命中区更窄、移动更快。先升级鱼叉提高容错，有枪械时先削血，再进入鱼枪抓捕。`;
-    if (msg.includes("图鉴")) return `图鉴路线：每次下潜换一个深度，优先拍保护动物、抓未发现鱼。节日当天查地图加成，稀有鱼等氧气和装载升级后再追。当前图鉴${codexCount}/${Object.keys(FISH).length}。`;
-    if (msg.includes("捕鱼") || msg.includes("抓鱼") || msg.includes("鱼枪")) return "鱼枪抓捕提示：必须主动点击“鱼枪锁定”才会涨条；白色瞄准线靠近绿色命中区时涨条，偏离或停手都会掉条。鱼越稀有、星级越高、攻击性越强，命中区越窄、移动越快；鱼叉越好越稳。";
-    return `当前判断：${phase === "day" ? "先潜水补货" : "先处理餐厅订单"}。当前库存：${topStock}。下一步建议：${phase === "day" ? "抓3条以上能做菜的鱼，再考虑挑战稀有鱼" : "优先给等待中的客人上菜，库存卖完会自动打烊"}。`;
+    const bestZone = ZONES[selZone]?.name || "当前水域";
+    if (msg.includes("最该") || msg.includes("路线") || msg.includes("今天") || msg.includes("任务")) return `【${agent.emoji}${agent.name}】今天建议：先去${bestZone}补到3-5条能做菜的鱼，再开夜晚营业。当前库存：${topStock}。氧气充足就抓一条高价鱼当主菜；氧气低就上浮保收益。`;
+    if (msg.includes("潜水") || msg.includes("去哪") || msg.includes("收益")) return `当前${phase === "day" ? "白天" : "夜晚"}，建议去${bestZone}补货。普通鱼保证今晚不断菜，稀有鱼等氧气和装载空间都够再追。装载箱超过80%就上浮，收益会更稳。`;
+    if (msg.includes("赚钱") || msg.includes("菜品") || msg.includes("配菜") || msg.includes("库存")) return `库存扫描：${topStock}。建议把${bestDish?.n || "最高价鱼"}留给夜晚做${bestDish?.cook || "主菜"}；低价鱼用于稳定接待。库存少于3条时不要拖长营业，卖完会自动打烊。`;
+    if (msg.includes("装备") || msg.includes("升级")) return `升级路线：先装载箱，再氧气瓶，再潜水服，最后补强鱼枪。装载提高每次下潜收入，氧气提高容错，潜水服解锁高价值区域；当前金币¥${gold.toLocaleString()}，不够就刷浅海稳定鱼。`;
+    if (msg.includes("评分") || msg.includes("营业") || msg.includes("客人")) return `经营判断：当前在店${openTables}桌，今晚已接待${nightServeCount}/${NIGHT_CUSTOMER_LIMIT}。客人只会点库存里能做的菜；先保证3条以上食材再营业，评分会稳很多。`;
+    if (msg.includes("BOSS") || msg.includes("稀有")) return `稀有鱼策略：氧气低于35%别挑战；如果有枪械，先削血再用鱼枪抓捕。高星和稀有目标移动更快，最好等鱼枪升级后再硬追。失败只扣一次氧气，不会在小游戏里持续耗氧。`;
+    if (msg.includes("图鉴")) return `图鉴路线：每次下潜换一个深度，优先拍保护动物、抓未发现鱼。节日当天看地图加成，稀有鱼等氧气瓶和装载箱升级后再追。当前图鉴${codexCount}/${Object.keys(FISH).length}。`;
+    if (msg.includes("氧气") || msg.includes("危险") || msg.includes("上浮")) return `氧气建议：低于35%不要碰BOSS和稀有鱼，低于20%直接上浮。鱼枪抓捕中不会持续掉氧，但失败会扣一次氧气，所以残氧少时别赌高星鱼。`;
+    if (msg.includes("捕鱼") || msg.includes("抓鱼") || msg.includes("鱼枪") || msg.includes("命中")) return "鱼枪抓捕提示：绿色区域是游动目标，白色竖线是鱼枪杆。长按或连续点击左右按钮跟住目标，贴住绿色区才涨进度；普通鱼速度慢，稀有鱼和BOSS会更快，高级鱼枪能提高杆速和容错。";
+    return `【${agent.emoji}${agent.name}】态势判断：${phase === "day" ? "先潜水补货" : "优先快速上菜"}。当前库存：${topStock}。我建议下一步：${phase === "day" ? "抓3-4条可做菜的鱼再开店" : "把最高价库存菜先卖掉，避免客人等待"}。`;
   };
   const askAi = async (preset = null) => {
     if (aiLoad) return;
@@ -3329,8 +3315,8 @@ function DeepCatch() {
       className: "dive-screen",
       style: {
         minHeight: "100vh",
-        background: z.bg,
-        color: "#cce8ff",
+        background: `linear-gradient(rgba(0,8,18,.42),rgba(0,8,18,.55)), ${z.bg}`,
+        color: "#eefaff",
         padding: 14,
         paddingBottom: 16,
         position: "relative",
@@ -3368,7 +3354,7 @@ function DeepCatch() {
       }
     }, /*#__PURE__*/React.createElement("div", {
       style: {
-        background: "rgba(0,0,0,.75)",
+        background: "rgba(0,6,16,.88)",
         borderRadius: 14,
         padding: "10px 14px",
         marginBottom: 10,
@@ -3392,7 +3378,7 @@ function DeepCatch() {
     }, z.emoji, " ", z.name), /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 9,
-        color: "rgba(150,200,220,.7)"
+        color: "rgba(210,240,255,.86)"
       }
     }, depthLabel, " \xB7 ", weather.emoji, weather.name)), /*#__PURE__*/React.createElement("div", {
       style: {
@@ -3424,7 +3410,7 @@ function DeepCatch() {
         display: "flex",
         justifyContent: "space-between",
         fontSize: 9,
-        color: o2p < 25 ? "#ff6666" : "#4a8aaa",
+        color: o2p < 25 ? "#ff8888" : "#9edfff",
         marginBottom: 2
       }
     }, /*#__PURE__*/React.createElement("span", {
@@ -3435,7 +3421,7 @@ function DeepCatch() {
     }, "\uD83D\uDCA7 \u6C27\u6C14"), /*#__PURE__*/React.createElement("span", null, dive.o2, "/", dive.maxO2)), /*#__PURE__*/React.createElement("div", {
       style: {
         height: 8,
-        background: "rgba(0,0,0,.5)",
+        background: "rgba(0,6,16,.82)",
         borderRadius: 4,
         overflow: "hidden",
         border: "1px solid rgba(0,80,120,.3)"
@@ -3458,7 +3444,7 @@ function DeepCatch() {
         display: "flex",
         justifyContent: "space-between",
         fontSize: 9,
-        color: dive.hp < 30 ? "#ff6666" : "#4a8aaa",
+        color: dive.hp < 30 ? "#ff8888" : "#9edfff",
         marginBottom: 2
       }
     }, /*#__PURE__*/React.createElement("span", {
@@ -3469,7 +3455,7 @@ function DeepCatch() {
     }, "\u2764\uFE0F \u751F\u547D"), /*#__PURE__*/React.createElement("span", null, dive.hp, "/", dive.maxHp)), /*#__PURE__*/React.createElement("div", {
       style: {
         height: 8,
-        background: "rgba(0,0,0,.5)",
+        background: "rgba(0,6,16,.82)",
         borderRadius: 4,
         overflow: "hidden",
         border: "1px solid rgba(0,80,40,.3)"
@@ -3488,13 +3474,13 @@ function DeepCatch() {
         display: "flex",
         justifyContent: "space-between",
         fontSize: 9,
-        color: cp > 90 ? "#ff8888" : "#4a8aaa",
+        color: cp > 90 ? "#ffb088" : "#9edfff",
         marginBottom: 2
       }
     }, /*#__PURE__*/React.createElement("span", null, "\uD83D\uDCE6 \u88C5\u8F7D"), /*#__PURE__*/React.createElement("span", null, dive.cargo.toFixed(1), "/", dive.maxCargo, "kg")), /*#__PURE__*/React.createElement("div", {
       style: {
         height: 6,
-        background: "rgba(0,0,0,.5)",
+        background: "rgba(0,6,16,.82)",
         borderRadius: 3,
         overflow: "hidden"
       }
@@ -3532,12 +3518,12 @@ function DeepCatch() {
       }
     }, notif), fishing && /*#__PURE__*/React.createElement("div", {
       style: {
-        background: "linear-gradient(180deg,rgba(0,20,55,.95),rgba(0,45,85,.92))",
-        border: "1px solid rgba(0,190,255,.45)",
+        background: "linear-gradient(180deg,rgba(0,12,32,.98),rgba(0,34,68,.96))",
+        border: "1px solid rgba(0,210,255,.55)",
         borderRadius: 14,
         padding: 12,
         marginBottom: 10,
-        boxShadow: "0 8px 30px rgba(0,0,0,.35)"
+        boxShadow: "0 8px 30px rgba(0,0,0,.55), inset 0 0 18px rgba(0,140,220,.12)"
       }
     }, /*#__PURE__*/React.createElement("div", {
       style: {
@@ -3550,19 +3536,28 @@ function DeepCatch() {
       style: {
         fontSize: 13,
         fontWeight: 800,
-        color: "#cceeff"
+        color: "#f2fbff"
       }
-    }, fishing.emoji, " \u6B63\u5728\u6355\u6349 ", fishing.name), /*#__PURE__*/React.createElement("div", {
+    }, fishing.emoji, " \u6B63\u5728\u9C7C\u67AA\u8FFD\u8E2A ", fishing.name), /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 9,
-        color: fishing.ag ? "#ff9966" : "#66ccff"
+        color: fishing.ag ? "#ffb088" : "#82ddff"
       }
     }, fishing.rare ? "稀有 " : "", "\u96BE\u5EA6 ", Math.round(fishing.difficulty))), /*#__PURE__*/React.createElement("div", {
       style: {
+        display: "flex",
+        gap: 6,
+        marginBottom: 8,
+        fontSize: 8,
+        color: "#8fcce2",
+        fontWeight: 700
+      }
+    }, /*#__PURE__*/React.createElement("span", null, "\u9C7C\u901F ", fishing.targetMaxSpeed.toFixed(1)), /*#__PURE__*/React.createElement("span", null, "\u6746\u901F ", fishing.cursorSpeed.toFixed(1)), /*#__PURE__*/React.createElement("span", null, "\u547D\u4E2D\u7A97 ", Math.round(fishing.hitWindow * 2), "%")), /*#__PURE__*/React.createElement("div", {
+      style: {
         position: "relative",
-        height: 86,
-        background: "linear-gradient(180deg,rgba(0,80,130,.35),rgba(0,18,40,.8))",
-        border: "1px solid rgba(0,120,190,.35)",
+        height: 92,
+        background: "linear-gradient(180deg,rgba(0,60,115,.58),rgba(0,10,24,.92))",
+        border: "1px solid rgba(0,160,230,.5)",
         borderRadius: 10,
         overflow: "hidden",
         marginBottom: 9
@@ -3571,26 +3566,38 @@ function DeepCatch() {
       style: {
         position: "absolute",
         left: `${fishing.target}%`,
-        top: 10,
+        top: 12,
         width: `${fishing.hitWindow * 2}%`,
-        height: 66,
+        height: 60,
         marginLeft: `-${fishing.hitWindow}%`,
         borderRadius: 10,
-        background: fishing.good ? "rgba(80,255,160,.34)" : "rgba(80,255,160,.18)",
+        background: fishing.good ? "rgba(80,255,160,.40)" : "rgba(80,255,160,.22)",
         border: `1px solid ${fishing.good ? "#66ffaa" : "#44ee99"}`,
-        boxShadow: fishing.good ? "0 0 24px rgba(80,255,160,.45)" : "0 0 16px rgba(80,255,160,.2)"
+        boxShadow: fishing.good ? "0 0 24px rgba(80,255,160,.55)" : "0 0 16px rgba(80,255,160,.25)"
+      }
+    }), /*#__PURE__*/React.createElement("div", {
+      style: {
+        position: "absolute",
+        left: `${fishing.target}%`,
+        top: 4,
+        width: 8,
+        height: 8,
+        marginLeft: -4,
+        borderRadius: "50%",
+        background: "#6dffb0",
+        boxShadow: "0 0 10px #6dffb0"
       }
     }), /*#__PURE__*/React.createElement("div", {
       style: {
         position: "absolute",
         left: `${fishing.cursor}%`,
-        top: 6,
+        top: 5,
         width: 5,
         height: 74,
         marginLeft: -2.5,
         borderRadius: 4,
-        background: fishing.locked ? "#ccffff" : "#fff",
-        boxShadow: fishing.locked ? "0 0 18px #66ffff" : "0 0 12px #00d4ff"
+        background: fishing.active ? "#ccffff" : "#fff",
+        boxShadow: fishing.active ? "0 0 18px #66ffff" : "0 0 12px #00d4ff"
       }
     }), /*#__PURE__*/React.createElement("div", {
       style: {
@@ -3610,32 +3617,45 @@ function DeepCatch() {
         background: fishing.progress < 25 ? "#ff5555" : "linear-gradient(90deg,#00aaff,#44ff99)",
         transition: "width .08s"
       }
-    }))), /*#__PURE__*/React.createElement("button", {
-      onMouseDown: pullFishing,
-      onTouchStart: e => {
-        e.preventDefault();
-        pullFishing();
-      },
+    }))), /*#__PURE__*/React.createElement("div", {
       style: {
-        width: "100%",
-        padding: "11px 0",
+        display: "grid",
+        gridTemplateColumns: "1fr 1fr",
+        gap: 8
+      }
+    }, /*#__PURE__*/React.createElement("button", _extends({}, ctrlProps(-1), {
+      style: {
+        padding: "12px 0",
         fontSize: 13,
-        fontWeight: 800,
-        background: fishing.locked ? "linear-gradient(135deg,rgba(0,190,220,.62),rgba(0,105,210,.45))" : "linear-gradient(135deg,rgba(0,130,220,.55),rgba(0,80,180,.4))",
+        fontWeight: 900,
+        background: fishCtrlRef.current < 0 ? "rgba(0,190,220,.55)" : "rgba(0,90,170,.36)",
         border: "1px solid #00aaff",
         borderRadius: 10,
-        color: "#ccf4ff",
+        color: "#e7fbff",
         cursor: "pointer",
         touchAction: "none"
       }
-    }, "\uD83D\uDD31 \u9C7C\u67AA\u9501\u5B9A / \u7A33\u4F4F\u7784\u51C6"), /*#__PURE__*/React.createElement("div", {
+    }), "\u2190 \u5DE6\u79FB\u9C7C\u67AA"), /*#__PURE__*/React.createElement("button", _extends({}, ctrlProps(1), {
+      style: {
+        padding: "12px 0",
+        fontSize: 13,
+        fontWeight: 900,
+        background: fishCtrlRef.current > 0 ? "rgba(0,190,220,.55)" : "rgba(0,90,170,.36)",
+        border: "1px solid #00aaff",
+        borderRadius: 10,
+        color: "#e7fbff",
+        cursor: "pointer",
+        touchAction: "none"
+      }
+    }), "\u53F3\u79FB\u9C7C\u67AA \u2192")), /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 9,
-        color: "#4a9ab8",
+        color: "#8fcce2",
         marginTop: 7,
-        textAlign: "center"
+        textAlign: "center",
+        fontWeight: 700
       }
-    }, "\u5FC5\u987B\u70B9\u51FB\u9C7C\u67AA\u9501\u5B9A\u624D\u4F1A\u63A8\u8FDB\uFF1B\u767D\u8272\u7784\u51C6\u7EBF\u8D34\u8FD1\u7EFF\u8272\u547D\u4E2D\u533A\u65F6\u6DA8\u6761\uFF0C\u504F\u79BB\u6216\u505C\u624B\u4F1A\u6389\u6761\u3002")), curFestival && /*#__PURE__*/React.createElement("div", {
+    }, "\u957F\u6309\u6216\u8FDE\u7EED\u70B9\u51FB\u5DE6\u53F3\u952E\uFF0C\u8BA9\u767D\u8272\u9C7C\u67AA\u6746\u8DDF\u4E0A\u7EFF\u8272\u6E38\u52A8\u76EE\u6807\uFF1B\u8D34\u4F4F\u547D\u4E2D\u533A\u624D\u6DA8\u6761\uFF0C\u505C\u624B\u6216\u504F\u79BB\u4F1A\u6389\u6761\u3002")), curFestival && /*#__PURE__*/React.createElement("div", {
       style: {
         background: `${curFestival.color}18`,
         border: `1px solid ${curFestival.color}44`,
@@ -3646,14 +3666,46 @@ function DeepCatch() {
         color: curFestival.color,
         animation: "pulse 2s infinite"
       }
-    }, curFestival.emoji, " ", curFestival.name, "\u52A0\u6210\u4E2D"), /*#__PURE__*/React.createElement("div", {
+    }, curFestival.emoji, " ", curFestival.name, "\u52A0\u6210\u4E2D"), Object.keys(dive.caughtMap || {}).length > 0 && /*#__PURE__*/React.createElement("div", {
+      style: {
+        background: "rgba(0,8,20,.82)",
+        border: "1px solid rgba(0,180,220,.32)",
+        borderRadius: 10,
+        padding: "8px 10px",
+        marginBottom: 10,
+        boxShadow: "0 4px 16px rgba(0,0,0,.35)"
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 10,
+        fontWeight: 800,
+        color: "#9feeff",
+        marginBottom: 5
+      }
+    }, "\uD83C\uDF92 \u6C34\u4E0B\u80CC\u5305"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        gap: 5,
+        flexWrap: "wrap"
+      }
+    }, Object.entries(dive.caughtMap).map(([id, n]) => FISH[id] && /*#__PURE__*/React.createElement("div", {
+      key: id,
+      style: {
+        fontSize: 9,
+        color: "#d8f6ff",
+        background: "rgba(0,55,90,.55)",
+        border: "1px solid rgba(80,210,255,.24)",
+        borderRadius: 7,
+        padding: "3px 7px"
+      }
+    }, FISH[id].e, " ", FISH[id].n, "\xD7", n)))), /*#__PURE__*/React.createElement("div", {
       style: {
         display: "grid",
         gridTemplateColumns: "1fr 1fr",
         gap: 10,
         marginBottom: 12
       }
-    }, dive.fish.map((fish, idx) => {
+    }, dive.fish.filter(f => !f.caught && !f.fled).map((fish, idx) => {
       const done = fish.caught || fish.fled;
       const prot = fish.prot || fish.v === 0;
       const boss = isBoss(fish);
@@ -3763,13 +3815,13 @@ function DeepCatch() {
       }, fish.n), /*#__PURE__*/React.createElement("div", {
         style: {
           fontSize: 8,
-          color: "#4a6a88",
+          color: "#a9d8ec",
           marginTop: 1
         }
       }, prot ? "🛡 保护动物" : `${fish.w}kg · ¥${fish.v}`), !done && !prot && /*#__PURE__*/React.createElement("div", {
         style: {
           fontSize: 8,
-          color: "#3a5a88",
+          color: "#93c8e0",
           marginTop: 1
         }
       }, "⭐".repeat(fish.q), " \u54C1\u8D28"))), !done && !prot && /*#__PURE__*/React.createElement("div", {
@@ -3779,7 +3831,7 @@ function DeepCatch() {
       }, /*#__PURE__*/React.createElement("div", {
         style: {
           height: 4,
-          background: "rgba(0,0,0,.5)",
+          background: "rgba(0,6,16,.82)",
           borderRadius: 2,
           overflow: "hidden"
         }
@@ -3795,7 +3847,7 @@ function DeepCatch() {
       })), /*#__PURE__*/React.createElement("div", {
         style: {
           fontSize: 8,
-          color: "#2a4a68",
+          color: "#7fb8d0",
           textAlign: "right",
           marginTop: 1
         }
@@ -3920,12 +3972,12 @@ function DeepCatch() {
       }
     }, "\u7ED3\u675F\u6F5C\u6C34"))), /*#__PURE__*/React.createElement("div", {
       style: {
-        background: "rgba(0,0,0,.35)",
+        background: "rgba(0,8,18,.72)",
         borderRadius: 8,
         padding: "5px 10px",
         marginBottom: 8,
         fontSize: 9,
-        color: "#2a5a78",
+        color: "#9fd8ef",
         display: "flex",
         gap: 12,
         flexWrap: "wrap"
@@ -3936,7 +3988,7 @@ function DeepCatch() {
       }
     }, "\u26A0\uFE0F \u6C27\u6C14\u5F52\u96F6\u81EA\u52A8\u4E0A\u6D6E")), /*#__PURE__*/React.createElement("div", {
       style: {
-        background: "rgba(0,0,0,.5)",
+        background: "rgba(0,6,16,.82)",
         borderRadius: 11,
         padding: 10,
         maxHeight: 110,
@@ -3947,7 +3999,7 @@ function DeepCatch() {
     }, /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 9,
-        color: "#2a4a68",
+        color: "#7fb8d0",
         marginBottom: 4,
         letterSpacing: 1
       }
@@ -3955,7 +4007,7 @@ function DeepCatch() {
       key: i,
       style: {
         fontSize: 10,
-        color: i === 0 ? "#88bbdd" : "#1e3a50",
+        color: i === 0 ? "#d7f4ff" : "#8fc4dc",
         padding: "2px 0",
         borderBottom: "1px solid rgba(255,255,255,.02)",
         lineHeight: 1.5
@@ -4749,7 +4801,7 @@ function DeepCatch() {
       }, inStock ? `库存${inv[d.fishId]}条` : "缺货")), /*#__PURE__*/React.createElement("div", {
         style: {
           fontSize: 8,
-          color: "#2a5a78",
+          color: "#9fd8ef",
           marginTop: 3
         }
       }, "\u23F1", d.cookTime, "\u79D2\u70F9\u996A"));
@@ -5077,7 +5129,7 @@ function DeepCatch() {
           display: "flex",
           justifyContent: "space-between",
           fontSize: 9,
-          color: "#2a5a78",
+          color: "#9fd8ef",
           marginBottom: hasDish ? 6 : 0
         }
       }, /*#__PURE__*/React.createElement("span", null, "\u5355\u4EF7\xA5", f.v), /*#__PURE__*/React.createElement("span", {
@@ -5113,7 +5165,7 @@ function DeepCatch() {
   }, "\uD83D\uDCB9 \u51FA\u552E\u9C7C\u7C7B\uFF08\u76F4\u63A5\u51FA\u552E\u800C\u4E0D\u505A\u6210\u83DC\uFF09"), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 9,
-      color: "#2a4a68",
+      color: "#7fb8d0",
       marginBottom: 10
     }
   }, "\u6CE8\u610F\uFF1A\u505A\u6210\u5BFF\u53F8\u552E\u4EF7\u66F4\u9AD8\uFF01\u5EFA\u8BAE\u7559\u4E0B\u9AD8\u54C1\u8D28\u9C7C\u7C7B\u3002"), /*#__PURE__*/React.createElement("div", {
@@ -5486,7 +5538,7 @@ function DeepCatch() {
       padding: 12,
       marginBottom: 14,
       textAlign: "center",
-      color: "#2a5a78",
+      color: "#9fd8ef",
       fontSize: 12
     }
   }, "\u4ECA\u5929\u6CA1\u6709\u8282\u65E5\uFF0C\u7167\u5E38\u4F5C\u4E1A"), /*#__PURE__*/React.createElement("div", {
@@ -5753,39 +5805,40 @@ function DeepCatch() {
     }, found ? f.n : "未发现"), found && /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 8,
-        color: "#2a5a78"
+        color: "#9fd8ef"
       }
     }, "\xD7", cnt, " \xB7 \xA5", f.v, f.prot ? " · 🛡" : "", f.rare ? " · ★" : ""), found && /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 8,
-        color: "#2a5a78"
+        color: "#9fd8ef"
       }
     }, starStr(f.q), " \u54C1\u8D28"))));
   }))))), tab === "ai" && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     style: {
-      background: "linear-gradient(135deg,rgba(0,55,120,.3),rgba(0,28,75,.3))",
+      background: "linear-gradient(135deg,rgba(0,55,120,.42),rgba(0,28,75,.38))",
       borderRadius: 12,
       padding: 12,
       marginBottom: 11,
-      border: "1px solid rgba(0,110,190,.28)"
+      border: "1px solid rgba(0,160,230,.38)",
+      boxShadow: "0 6px 18px rgba(0,0,0,.24)"
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
-      fontSize: 12,
-      fontWeight: 700,
-      color: "#00d4ff",
-      marginBottom: 3
+      fontSize: 13,
+      fontWeight: 800,
+      color: "#d8f7ff",
+      marginBottom: 4
     }
-  }, "\uD83E\uDD16 \u6DF1\u6D77\u987E\u95EE \xB7 \u6E38\u620F\u52A9\u624B"), /*#__PURE__*/React.createElement("div", {
+  }, "\uD83E\uDD16 \u6DF1\u6D77\u987E\u95EE"), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 10,
-      color: "#4a7a8a",
+      color: "#9bdcf2",
       lineHeight: 1.7
     }
-  }, "\u987E\u95EE\u4F1A\u8BFB\u53D6\u5F53\u524D\u9636\u6BB5\u3001\u5E93\u5B58\u3001\u5BA2\u4EBA\u3001\u88C5\u5907\u3001\u91D1\u5E01\u3001\u56FE\u9274\u548C\u6C34\u57DF\u4FE1\u606F\uFF0C\u53EA\u56DE\u7B54\u7ECF\u8425\u3001\u6F5C\u6C34\u3001\u6293\u9C7C\u3001\u5347\u7EA7\u548C\u8DEF\u7EBF\u95EE\u9898\u3002")), advisorTips.length > 0 && /*#__PURE__*/React.createElement("div", {
+  }, ADVISOR_PROFILE.desc, "\u3002\u4F60\u53EF\u4EE5\u76F4\u63A5\u8F93\u5165\u95EE\u9898\uFF0C\u4E5F\u53EF\u4EE5\u70B9\u4E0B\u9762\u7684\u5E38\u7528\u95EE\u9898\u3002")), advisorTips.length > 0 && /*#__PURE__*/React.createElement("div", {
     style: {
-      background: "rgba(0,18,42,.62)",
-      border: "1px solid rgba(0,105,170,.34)",
+      background: "rgba(0,18,42,.76)",
+      border: "1px solid rgba(0,130,190,.42)",
       borderRadius: 10,
       padding: 10,
       marginBottom: 10
@@ -5794,40 +5847,29 @@ function DeepCatch() {
     style: {
       fontSize: 10,
       fontWeight: 800,
-      color: "#66ccff",
+      color: "#9feeff",
       marginBottom: 6
     }
-  }, "\uD83D\uDCE1 \u5F53\u524D\u63D0\u793A"), advisorTips.map((tip, i) => /*#__PURE__*/React.createElement("div", {
+  }, "\uD83D\uDCCC \u5F53\u524D\u63D0\u793A"), advisorTips.map((tip, i) => /*#__PURE__*/React.createElement("div", {
     key: i,
     style: {
       fontSize: 10,
       lineHeight: 1.55,
-      color: "#78aeca",
+      color: "#d8f6ff",
       padding: "3px 0",
-      borderTop: i ? "1px solid rgba(255,255,255,.04)" : "none"
+      borderTop: i ? "1px solid rgba(255,255,255,.07)" : "none"
     }
   }, tip))), /*#__PURE__*/React.createElement("div", {
     style: {
-      background: "rgba(0,12,32,.5)",
-      border: "1px solid rgba(0,70,130,.28)",
-      borderRadius: 10,
-      padding: 10,
-      marginBottom: 10,
-      fontSize: 10,
-      color: "#5f9fc0",
-      lineHeight: 1.55
-    }
-  }, "顾问已合并为一个游戏内助手，会根据库存、下潜、抓鱼、装备和餐厅状态给建议。"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      maxHeight: 260,
+      maxHeight: 300,
       overflowY: "auto",
       marginBottom: 10
     }
   }, aiHist.map((m, i) => /*#__PURE__*/React.createElement("div", {
     key: i,
     style: {
-      background: m.role === "user" ? "rgba(0,50,110,.4)" : "rgba(0,28,14,.4)",
-      border: `1px solid ${m.role === "user" ? "rgba(0,80,160,.3)" : "rgba(0,110,50,.3)"}`,
+      background: m.role === "user" ? "rgba(0,50,110,.56)" : "rgba(0,45,42,.58)",
+      border: `${m.role === "user" ? "1px solid rgba(0,120,200,.42)" : "1px solid rgba(60,210,150,.38)"}`,
       borderRadius: 9,
       padding: "9px 12px",
       marginBottom: 6
@@ -5835,29 +5877,29 @@ function DeepCatch() {
   }, /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 9,
-      color: m.role === "user" ? "#2a7a9a" : "#27994d",
+      color: m.role === "user" ? "#8edfff" : "#8dffcf",
       marginBottom: 2
     }
-  }, m.role === "user" ? "👤 你" : "🤖 AI顾问"), /*#__PURE__*/React.createElement("div", {
+  }, m.role === "user" ? "👤 你" : "🤖 深海顾问"), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 12,
       lineHeight: 1.65,
-      color: "#aacce8"
+      color: "#e3f8ff"
     }
   }, m.content))), aiHist.length === 0 && /*#__PURE__*/React.createElement("div", {
     style: {
       textAlign: "center",
       padding: 12,
-      color: "#1e4460"
+      color: "#78aac2"
     }
-  }, "\u9009\u62E9\u4E0B\u65B9\u95EE\u9898\uFF0C\u987E\u95EE\u4F1A\u7ACB\u523B\u7ED9\u51FA\u5EFA\u8BAE\u3002"), aiLoad && /*#__PURE__*/React.createElement("div", {
+  }, "\u95EE\u4E00\u4E2A\u7ECF\u8425\u3001\u6F5C\u6C34\u3001\u9C7C\u67AA\u3001\u5347\u7EA7\u6216\u56FE\u9274\u95EE\u9898\uFF0C\u987E\u95EE\u4F1A\u6309\u5F53\u524D\u72B6\u6001\u56DE\u7B54\u3002"), aiLoad && /*#__PURE__*/React.createElement("div", {
     style: {
       textAlign: "center",
       padding: 12,
-      color: "#1e4460",
+      color: "#9feeff",
       animation: "pulse 1s infinite"
     }
-  }, "\uD83E\uDD16 \u601D\u8003\u4E2D\u2026")), /*#__PURE__*/React.createElement("div", {
+  }, "\uD83E\uDD16 \u5206\u6790\u5F53\u524D\u5C40\u52BF\u4E2D...")), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 7,
@@ -5867,15 +5909,15 @@ function DeepCatch() {
     value: aiIn,
     onChange: e => setAiIn(e.target.value),
     onKeyDown: e => e.key === "Enter" && askAi(),
-    placeholder: "\u95EE\u95EEAI\u987E\u95EE\u2026",
+    placeholder: "\u95EE\u6DF1\u6D77\u987E\u95EE...",
     style: {
       flex: 1,
       padding: "10px 12px",
       fontSize: 12,
-      background: "rgba(0,15,40,.7)",
-      border: "1px solid rgba(0,60,120,.4)",
+      background: "rgba(0,15,40,.78)",
+      border: "1px solid rgba(0,110,170,.48)",
       borderRadius: 9,
-      color: "#aacce8",
+      color: "#e6fbff",
       outline: "none"
     }
   }), /*#__PURE__*/React.createElement("button", {
@@ -5883,12 +5925,13 @@ function DeepCatch() {
     disabled: aiLoad,
     style: {
       padding: "10px 14px",
-      background: "rgba(0,100,180,.38)",
-      border: "1px solid #0044cc",
+      background: "rgba(0,120,190,.46)",
+      border: "1px solid #00aaff",
       borderRadius: 9,
-      color: "#00ccff",
+      color: "#d8fbff",
       cursor: "pointer",
-      fontSize: 12
+      fontSize: 12,
+      fontWeight: 800
     }
   }, "\u53D1\u9001")), /*#__PURE__*/React.createElement("div", {
     style: {
@@ -5900,12 +5943,12 @@ function DeepCatch() {
     key: q,
     onClick: () => askAi(q),
     style: {
-      padding: "5px 9px",
+      padding: "6px 9px",
       fontSize: 9,
-      background: "rgba(0,22,65,.42)",
-      border: "1px solid rgba(0,50,110,.3)",
+      background: "rgba(0,42,85,.58)",
+      border: "1px solid rgba(80,190,240,.32)",
       borderRadius: 15,
-      color: "#4a7a8a",
+      color: "#d7f7ff",
       cursor: "pointer"
     }
   }, q))))), /*#__PURE__*/React.createElement("div", {
