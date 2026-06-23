@@ -2330,59 +2330,199 @@ function DeepCatch() {
     const t = setInterval(() => {
       setFishing(g => {
         if (!g) return g;
-        const nextTurn = Math.max(0, (g.turn || 0) - 1);
-        let dir = g.dir;
-        if (nextTurn <= 0 || Math.random() < g.turnChance) dir = Math.random() > .5 ? 1 : -1;
-        let velocity = (Number.isFinite(g.velocity) ? g.velocity : 0) * 0.82 + dir * g.targetAccel + (Math.random() - .5) * g.jitter;
-        velocity = Math.max(-g.targetMaxSpeed, Math.min(g.targetMaxSpeed, velocity));
-        let target = g.target + velocity;
-        if (target > 92) {
-          target = 92;
-          dir = -1;
-          velocity = -Math.abs(velocity) * 0.7;
-        }
-        if (target < 8) {
-          target = 8;
-          dir = 1;
-          velocity = Math.abs(velocity) * 0.7;
-        }
-        const cursor = Math.max(4, Math.min(96, g.cursor + fishCtrlRef.current * g.cursorSpeed));
-        const distance = Math.abs(cursor - target);
-        const good = distance < g.hitWindow;
-        const active = fishCtrlRef.current !== 0;
-        const delta = active && good ? g.lockPower : -(good ? g.decay * 0.45 : g.decay);
-        const progress = Math.max(0, Math.min(100, g.progress + delta));
-        if (progress >= 100) {
-          setTimeout(() => finishFishing(true), 0);
+        const mode = g.mode || "track";
+        if (mode === "track") {
+          const nextTurn = Math.max(0, (g.turn || 0) - 1);
+          let dir = g.dir;
+          if (nextTurn <= 0 || Math.random() < g.turnChance) dir = Math.random() > .5 ? 1 : -1;
+          let velocity = (Number.isFinite(g.velocity) ? g.velocity : 0) * 0.86 + dir * g.targetAccel + (Math.random() - .5) * g.jitter;
+          velocity = Math.max(-g.targetMaxSpeed, Math.min(g.targetMaxSpeed, velocity));
+          let target = g.target + velocity;
+          if (target > 93) {
+            target = 93;
+            dir = -1;
+            velocity = -Math.abs(velocity) * 0.78;
+          }
+          if (target < 7) {
+            target = 7;
+            dir = 1;
+            velocity = Math.abs(velocity) * 0.78;
+          }
+          const cursor = Math.max(4, Math.min(96, g.cursor + fishCtrlRef.current * g.cursorSpeed));
+          const distance = Math.abs(cursor - target);
+          const good = distance < g.hitWindow;
+          const active = fishCtrlRef.current !== 0;
+          const delta = active && good ? g.lockPower : -(good ? g.decay * 0.35 : g.decay);
+          const progress = Math.max(0, Math.min(100, g.progress + delta));
+          if (progress >= 100) {
+            setTimeout(() => finishFishing(true), 0);
+            return {
+              ...g,
+              progress: 100,
+              target,
+              cursor,
+              dir
+            };
+          }
+          if (progress <= 0) {
+            setTimeout(() => finishFishing(false), 0);
+            return {
+              ...g,
+              progress: 0,
+              target,
+              cursor,
+              dir
+            };
+          }
           return {
             ...g,
-            progress: 100,
             target,
             cursor,
-            dir
+            dir,
+            velocity,
+            turn: nextTurn <= 0 ? g.turnEvery : nextTurn,
+            progress,
+            active,
+            good
           };
         }
-        if (progress <= 0) {
-          setTimeout(() => finishFishing(false), 0);
+        if (mode === "whack") {
+          const left = Math.max(0, (g.timeLeft || 0) - 80);
+          const spotLife = Math.max(0, (g.spotLife || 0) - 80);
+          let progress = Math.max(0, g.progress - g.decay * 0.46);
+          let next = {
+            ...g,
+            timeLeft: left,
+            spotLife,
+            progress,
+            active: false,
+            good: false
+          };
+          if (spotLife <= 0) {
+            const misses = (g.misses || 0) + 1;
+            next = {
+              ...next,
+              misses,
+              progress: Math.max(0, progress - g.missPenalty),
+              spotLife: g.reactMs,
+              targetX: 10 + Math.random() * 80,
+              targetY: 16 + Math.random() * 58
+            };
+          }
+          if (left <= 0) {
+            setTimeout(() => finishFishing(next.progress >= 72), 0);
+            return next;
+          }
+          return next;
+        }
+        if (mode === "rhythm") {
+          let cursor = g.cursor + (g.dir || 1) * g.cursorSpeed;
+          let dir = g.dir || 1;
+          if (cursor > 96) {
+            cursor = 96;
+            dir = -1;
+          }
+          if (cursor < 4) {
+            cursor = 4;
+            dir = 1;
+          }
+          const left = Math.max(0, (g.timeLeft || 0) - 80);
+          const distance = Math.abs(cursor - g.target);
+          const good = distance < g.hitWindow;
+          const progress = Math.max(0, Math.min(100, g.progress - (good ? g.decay * 0.16 : g.decay * 0.32)));
+          if (progress >= 100) {
+            setTimeout(() => finishFishing(true), 0);
+            return {
+              ...g,
+              progress: 100,
+              cursor,
+              dir,
+              good
+            };
+          }
+          if (left <= 0) {
+            setTimeout(() => finishFishing(progress >= 70), 0);
+            return {
+              ...g,
+              timeLeft: 0,
+              progress,
+              cursor,
+              dir,
+              good
+            };
+          }
           return {
             ...g,
-            progress: 0,
-            target,
+            timeLeft: left,
+            progress,
             cursor,
-            dir
+            dir,
+            good,
+            active: false
           };
         }
-        return {
-          ...g,
-          target,
-          cursor,
-          dir,
-          velocity,
-          turn: nextTurn <= 0 ? g.turnEvery : nextTurn,
-          progress,
-          active,
-          good
-        };
+        if (mode === "combo") {
+          const left = Math.max(0, (g.timeLeft || 0) - 80);
+          const nextBeat = Math.max(0, (g.nextBeat || 0) - 80);
+          const flash = Math.max(0, (g.flash || 0) - 80);
+          const progress = Math.max(0, g.progress - g.decay * 0.22);
+          let next = {
+            ...g,
+            timeLeft: left,
+            nextBeat,
+            flash,
+            progress,
+            good: flash > 0
+          };
+          if (nextBeat <= 0) {
+            next = {
+              ...next,
+              nextBeat: g.beatGap,
+              flash: g.flashMs,
+              beatId: (g.beatId || 0) + 1,
+              armed: true
+            };
+          }
+          if (left <= 0) {
+            setTimeout(() => finishFishing(next.progress >= 68), 0);
+            return next;
+          }
+          return next;
+        }
+        if (mode === "pressure") {
+          const left = Math.max(0, (g.timeLeft || 0) - 80);
+          const pressure = Math.max(0, Math.min(100, (g.pressure || 0) + (fishCtrlRef.current ? g.pumpRate : -g.leakRate)));
+          const good = pressure >= g.low && pressure <= g.high;
+          const progress = Math.max(0, Math.min(100, g.progress + (good ? g.lockPower : -g.decay * 0.72)));
+          if (progress >= 100) {
+            setTimeout(() => finishFishing(true), 0);
+            return {
+              ...g,
+              progress: 100,
+              pressure,
+              good
+            };
+          }
+          if (left <= 0) {
+            setTimeout(() => finishFishing(progress >= 72), 0);
+            return {
+              ...g,
+              timeLeft: 0,
+              progress,
+              pressure,
+              good
+            };
+          }
+          return {
+            ...g,
+            timeLeft: left,
+            progress,
+            pressure,
+            good,
+            active: fishCtrlRef.current !== 0
+          };
+        }
+        return g;
       });
     }, 80);
     return () => clearInterval(t);
@@ -2404,6 +2544,102 @@ function DeepCatch() {
   };
   const pullFishing = () => steerFishing(-1);
   const pushFishing = () => steerFishing(1);
+  const strikeSpot = e => {
+    if (!fishingRef.current || fishingRef.current.mode !== "whack") return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width * 100;
+    const y = (e.clientY - rect.top) / rect.height * 100;
+    setFishing(g => {
+      if (!g || g.mode !== "whack") return g;
+      const dx = (x - g.targetX) / 100 * rect.width;
+      const dy = (y - g.targetY) / 100 * rect.height;
+      const hit = Math.sqrt(dx * dx + dy * dy) <= g.hitRadius + 8;
+      const progress = Math.max(0, Math.min(100, g.progress + (hit ? g.hitGain : -g.missPenalty)));
+      if (progress >= 100) {
+        setTimeout(() => finishFishing(true), 0);
+      }
+      return {
+        ...g,
+        progress,
+        hits: (g.hits || 0) + (hit ? 1 : 0),
+        misses: (g.misses || 0) + (hit ? 0 : 1),
+        targetX: 10 + Math.random() * 80,
+        targetY: 16 + Math.random() * 58,
+        spotLife: g.reactMs,
+        active: true,
+        good: hit
+      };
+    });
+  };
+  const rhythmShot = () => {
+    setFishing(g => {
+      if (!g || g.mode !== "rhythm") return g;
+      const hit = Math.abs(g.cursor - g.target) < g.hitWindow;
+      const progress = Math.max(0, Math.min(100, g.progress + (hit ? g.shotGain : -g.missPenalty)));
+      const target = 16 + Math.random() * 68;
+      if (progress >= 100) {
+        setTimeout(() => finishFishing(true), 0);
+      }
+      return {
+        ...g,
+        progress,
+        target,
+        shots: (g.shots || 0) + 1,
+        hits: (g.hits || 0) + (hit ? 1 : 0),
+        active: true,
+        good: hit
+      };
+    });
+  };
+  const comboTap = () => {
+    setFishing(g => {
+      if (!g || g.mode !== "combo") return g;
+      const hit = (g.flash || 0) > 0 && g.armed;
+      const streak = hit ? (g.streak || 0) + 1 : 0;
+      const gain = hit ? g.hitGain + Math.min(10, streak * 2) : -g.missPenalty;
+      const progress = Math.max(0, Math.min(100, g.progress + gain));
+      if (progress >= 100) {
+        setTimeout(() => finishFishing(true), 0);
+      }
+      return {
+        ...g,
+        progress,
+        streak,
+        armed: false,
+        active: true,
+        good: hit
+      };
+    });
+  };
+  const pressureProps = {
+    onMouseDown: e => {
+      e.preventDefault();
+      fishCtrlRef.current = 1;
+      setFishing(g => g ? {
+        ...g,
+        active: true
+      } : g);
+    },
+    onMouseUp: stopFishing,
+    onMouseLeave: stopFishing,
+    onTouchStart: e => {
+      e.preventDefault();
+      fishCtrlRef.current = 1;
+      setFishing(g => g ? {
+        ...g,
+        active: true
+      } : g);
+    },
+    onTouchEnd: e => {
+      e.preventDefault();
+      stopFishing();
+    },
+    onClick: e => {
+      e.preventDefault();
+      fishCtrlRef.current = 1;
+      setTimeout(stopFishing, 120);
+    }
+  };
   const ctrlProps = dir => ({
     onMouseDown: e => {
       e.preventDefault();
@@ -2620,7 +2856,7 @@ function DeepCatch() {
     }
     const cookMult = hasU("r7") ? 0.6 : 1.0;
     const cookMs = Math.floor(dish.cookTime * 1000 * cookMult * (hasS("w1") ? 0.80 : 1.0));
-    const bill = Math.floor(dish.basePrice * cust.spendMult);
+    const bill = Math.floor(dish.basePrice * cust.spendMult * (cust.comboBoost || 1));
     setInv(p => ({
       ...p,
       [dish.fishId]: p[dish.fishId] - 1
@@ -2641,6 +2877,64 @@ function DeepCatch() {
       orderedDish: dish.name,
       status: "waiting"
     } : c));
+  };
+  const rushCooking = () => {
+    if (phase !== "night" || !cookQueue.length) return;
+    const cost = Math.max(80, Math.floor(160 - restLv * 12));
+    if (gold < cost) {
+      notify("❌ 快速备菜需要¥" + cost);
+      return;
+    }
+    setGold(g => g - cost);
+    setCookQueue(q => q.map((item, i) => i === 0 ? {
+      ...item,
+      finishAt: Math.max(Date.now() + 900, item.finishAt - 5200 - restLv * 450)
+    } : item));
+    addRLog("🔥 快速备菜启动，最前一道菜加速完成 -¥" + cost);
+  };
+  const recommendSignature = () => {
+    if (phase !== "night") return;
+    const best = availDishes.filter(d => (inv[d.fishId] || 0) > 0).sort((a, b) => b.basePrice - a.basePrice)[0];
+    if (!best) {
+      notify("❌ 没有可推荐的库存菜");
+      return;
+    }
+    const waiting = customers.filter(c => c.status === "waiting").length;
+    addRLog("📣 今日招牌推荐：" + best.emoji + best.name + "，适合优先服务高消费客人。当前等待" + waiting + "桌。");
+    notify("📣 招牌推荐：" + best.name);
+  };
+  const comfortGuests = () => {
+    if (phase !== "night") return;
+    const waiting = customers.filter(c => c.status === "waiting").length;
+    if (!waiting) {
+      notify("现在没有需要安抚的客人");
+      return;
+    }
+    const cost = waiting * 70;
+    if (gold < cost) {
+      notify("❌ 安抚客人需要¥" + cost);
+      return;
+    }
+    setGold(g => g - cost);
+    setCustomers(cs => cs.map(c => c.status === "waiting" ? {
+      ...c,
+      patienceEnd: c.patienceEnd + 9000
+    } : c));
+    addRLog("🍵 送上海藻茶安抚" + waiting + "桌客人，耐心延长 -¥" + cost);
+  };
+  const premiumCombo = () => {
+    if (phase !== "night") return;
+    const waiting = customers.filter(c => c.status === "waiting").length;
+    if (!waiting) {
+      notify("现在没有可推荐套餐的客人");
+      return;
+    }
+    setCustomers(cs => cs.map(c => c.status === "waiting" ? {
+      ...c,
+      comboBoost: 1.18,
+      patienceEnd: c.patienceEnd - 2500
+    } : c));
+    addRLog("💎 推出限时套餐：等待客人的消费提高，但耐心会略降。");
   };
 
   // ── START DIVE ──
@@ -2776,11 +3070,11 @@ function DeepCatch() {
     setTab("map");
   };
   const startFishingChallenge = fish => {
-    if (!dive || fish.caught || fish.fled) return;
+    if (!dive || fish.caught || fish.fled || fishing) return;
     if (fish.prot || fish.v === 0) {
       setDive(p => ({
         ...p,
-        dlog: [`📷 ${fish.n}是保护动物！拍照 +${fish.xp}XP`, ...p.dlog],
+        dlog: ["📷 " + fish.n + "是保护动物！拍照 +" + fish.xp + "XP", ...p.dlog],
         fish: p.fish.filter(f => f.uid !== fish.uid),
         caughtMap: {
           ...p.caughtMap,
@@ -2794,55 +3088,133 @@ function DeepCatch() {
     if (dive.cargo + fish.w > dive.maxCargo) {
       setDive(p => ({
         ...p,
-        dlog: [`📦 装载箱满！${fish.n}放不下`, ...p.dlog]
+        dlog: ["📦 装载箱满！" + fish.n + "放不下", ...p.dlog]
       }));
       return;
     }
     const harpoon = eq("harpoon");
     const catchBonus = hasS("w7") ? 6 : 0;
-    const fishPower = fish.q * 9 + (fish.rare ? 10 : 0) + (fish.ag ? 7 : 0) + (isBossFish(fish) ? 14 : 0);
-    const equipPower = harpoon.rate * 26 + catchBonus + festCatchBonus * 80;
-    const difficulty = Math.max(8, Math.min(62, fishPower + 8 - equipPower));
-    const hitWindow = Math.max(8, Math.min(28, 28 - difficulty * 0.22 + harpoon.rate * 7));
-    const targetMaxSpeed = Math.max(.72, Math.min(2.7, .58 + fishPower / 34));
-    const targetAccel = Math.max(.10, Math.min(.34, .08 + fishPower / 160));
-    const cursorSpeed = Math.max(1.35, Math.min(3.7, 1.15 + harpoon.rate * 2.15 + catchBonus * .06));
-    const tapStep = cursorSpeed * 1.55;
-    const lockPower = Math.max(1.55, Math.min(4.2, 2.4 + harpoon.rate * 1.25 - difficulty / 55));
-    const decay = Math.max(.45, Math.min(1.65, .52 + difficulty / 70));
-    setFishing({
+    const boss = isBossFish(fish);
+    const fishPower = fish.q * 11 + (fish.rare ? 12 : 0) + (fish.ag ? 8 : 0) + (boss ? 18 : 0);
+    const equipPower = harpoon.rate * 20 + catchBonus + festCatchBonus * 64;
+    const difficulty = Math.max(12, Math.min(76, fishPower + 10 - equipPower));
+    const modeRoll = Math.random();
+    const mode = fish.q <= 1 ? modeRoll < 0.38 ? "track" : modeRoll < 0.60 ? "whack" : modeRoll < 0.78 ? "rhythm" : modeRoll < 0.90 ? "combo" : "pressure" : fish.ag || fish.rare ? modeRoll < 0.23 ? "track" : modeRoll < 0.43 ? "whack" : modeRoll < 0.64 ? "rhythm" : modeRoll < 0.82 ? "combo" : "pressure" : modeRoll < 0.30 ? "track" : modeRoll < 0.50 ? "whack" : modeRoll < 0.70 ? "rhythm" : modeRoll < 0.86 ? "combo" : "pressure";
+    const hitWindow = Math.max(6.5, Math.min(23, 22 - difficulty * 0.18 + harpoon.rate * 4.4));
+    const targetMaxSpeed = Math.max(1.05, Math.min(4.2, .95 + fishPower / 31 - harpoon.rate * .12));
+    const targetAccel = Math.max(.14, Math.min(.52, .12 + fishPower / 135));
+    const cursorSpeed = Math.max(1.65, Math.min(4.9, 1.28 + harpoon.rate * 1.9 + catchBonus * .05));
+    const tapStep = cursorSpeed * 1.45;
+    const lockPower = Math.max(1.25, Math.min(3.7, 2.05 + harpoon.rate * .82 - difficulty / 72));
+    const decay = Math.max(.55, Math.min(1.95, .58 + difficulty / 62));
+    const base = {
       fishUid: fish.uid,
       fishId: fish.id,
       name: fish.n,
       emoji: fish.e,
       weight: fish.w,
       xp: fish.xp,
-      progress: 38,
-      cursor: 50,
-      target: 36 + Math.random() * 28,
-      dir: Math.random() > .5 ? 1 : -1,
+      mode,
       difficulty,
       hitWindow,
       lockPower,
       decay,
-      targetMaxSpeed,
-      targetAccel,
       cursorSpeed,
       tapStep,
-      velocity: 0,
-      jitter: Math.max(.08, Math.min(.46, .08 + fishPower / 150)),
-      turnEvery: Math.max(10, Math.floor(28 - fishPower / 3)),
-      turn: 8 + Math.floor(Math.random() * 10),
-      turnChance: Math.max(.015, Math.min(.08, .015 + fishPower / 900)),
-      active: false,
-      good: false,
-      o2Penalty: Math.max(3, Math.floor((fish.dmg || fish.q * 3) * (fish.ag ? 1.0 : 0.55) + fish.q)),
+      targetMaxSpeed,
+      targetAccel,
+      o2Penalty: Math.max(4, Math.floor((fish.dmg || fish.q * 3) * (fish.ag ? 1.05 : .62) + fish.q)),
       rare: fish.rare,
-      ag: fish.ag
-    });
+      ag: fish.ag,
+      boss
+    };
+    let game;
+    if (mode === "track") {
+      game = {
+        ...base,
+        progress: 32,
+        cursor: 50,
+        target: 28 + Math.random() * 44,
+        dir: Math.random() > .5 ? 1 : -1,
+        velocity: 0,
+        jitter: Math.max(.14, Math.min(.62, .12 + fishPower / 120)),
+        turnEvery: Math.max(7, Math.floor(24 - fishPower / 4)),
+        turn: 5 + Math.floor(Math.random() * 9),
+        turnChance: Math.max(.025, Math.min(.12, .02 + fishPower / 620)),
+        active: false,
+        good: false
+      };
+    } else if (mode === "whack") {
+      game = {
+        ...base,
+        progress: 18,
+        timeLeft: Math.max(7600, 11800 - difficulty * 54 + harpoon.rate * 650),
+        reactMs: Math.max(620, 1120 - difficulty * 5 + harpoon.rate * 80),
+        spotLife: 760,
+        targetX: 12 + Math.random() * 76,
+        targetY: 16 + Math.random() * 58,
+        hitRadius: Math.max(9, 18 - difficulty * .08 + harpoon.rate * 1.4),
+        hitGain: Math.max(18, 26 + harpoon.rate * 2.6 - difficulty * .12),
+        missPenalty: Math.max(5, 10 + difficulty * .05),
+        hits: 0,
+        misses: 0,
+        active: false,
+        good: false
+      };
+    } else if (mode === "rhythm") {
+      const target = 22 + Math.random() * 56;
+      game = {
+        ...base,
+        progress: 24,
+        timeLeft: Math.max(8200, 12600 - difficulty * 58 + harpoon.rate * 720),
+        cursor: Math.random() > .5 ? 8 : 92,
+        target,
+        dir: Math.random() > .5 ? 1 : -1,
+        hitWindow: Math.max(7, hitWindow * .82),
+        shotGain: Math.max(16, 23 + harpoon.rate * 2.2 - difficulty * .12),
+        missPenalty: Math.max(6, 11 + difficulty * .06),
+        shots: 0,
+        hits: 0,
+        active: false,
+        good: false
+      };
+    } else if (mode === "combo") {
+      game = {
+        ...base,
+        progress: 16,
+        timeLeft: Math.max(8400, 12200 - difficulty * 45 + harpoon.rate * 650),
+        beatGap: Math.max(560, 980 - difficulty * 4.2 + harpoon.rate * 80),
+        flashMs: Math.max(240, 430 - difficulty * 1.45 + harpoon.rate * 38),
+        nextBeat: 300,
+        flash: 0,
+        hitGain: Math.max(13, 20 + harpoon.rate * 2 - difficulty * .09),
+        missPenalty: Math.max(5, 9 + difficulty * .05),
+        streak: 0,
+        beatId: 0,
+        armed: false,
+        active: false,
+        good: false
+      };
+    } else {
+      const band = Math.max(13, 25 - difficulty * .10 + harpoon.rate * 1.55);
+      const center = 36 + Math.random() * 28;
+      game = {
+        ...base,
+        progress: 18,
+        timeLeft: Math.max(8800, 12400 - difficulty * 45 + harpoon.rate * 700),
+        pressure: 18 + Math.random() * 30,
+        low: Math.max(8, center - band / 2),
+        high: Math.min(92, center + band / 2),
+        pumpRate: Math.max(5.7, 8.5 + harpoon.rate * .98),
+        leakRate: Math.max(2.5, 4.3 + difficulty / 48),
+        active: false,
+        good: false
+      };
+    }
+    setFishing(game);
     if (fish.ag) {
       const lines = ["别靠近我的水域！", "想抓我？先追上我！", "水流会替我挡住你！", "看准了再下叉！"];
-      setFishTalk(`${fish.e} ${fish.n}：${lines[Math.floor(Math.random() * lines.length)]}`);
+      setFishTalk(fish.e + " " + fish.n + "：" + lines[Math.floor(Math.random() * lines.length)]);
       setTimeout(() => setFishTalk(null), 2500);
     }
   };
@@ -2974,7 +3346,7 @@ function DeepCatch() {
       }));
       return;
     }
-    // 生成全新一批鱼，旧鱼标记为 fled
+    // 生成全新一批鱼，旧区域鱼群直接散去。
     const biolum = weather.id === "biolum" || curFestival?.effect?.rareBoostDeep > 1;
     const festZoneBoost = curFestival?.effect?.zone === dive.zone;
     const festFishBoost = curFestival?.effect?.fishBoost;
@@ -3024,14 +3396,9 @@ function DeepCatch() {
     }
     setDive(p => ({
       ...p,
-      fish: [...p.fish.map(f => !f.caught && !f.fled ? {
-        ...f,
-        fled: true
-      } : f),
-      // 旧鱼全部标记为逃跑
-      ...newFish],
+      fish: [...newFish],
       o2: p.o2 - O2_COST,
-      dlog: [`🌊 换到新区域！发现${count}种新生物 -${O2_COST}氧气`, ...p.dlog]
+      dlog: [`🌊 换到新区域！旧区域鱼群已散去，发现${newFish.length}种新生物 -${O2_COST}氧气`, ...p.dlog]
     }));
     notify(`🌊 换区成功！-${O2_COST}氧气`);
   };
@@ -3099,7 +3466,7 @@ function DeepCatch() {
     emoji: "🤖",
     desc: "读取阶段、库存、装备、客人和图鉴状态，给出下一步玩法建议"
   };
-  const AI_QUESTIONS = ["现在最该做什么？", "今晚怎么营业最稳？", "去哪潜水收益最高？", "库存如何配菜？", "下一步升级什么？", "鱼枪怎么更容易命中？", "BOSS和稀有鱼怎么抓？", "图鉴怎么收集更快？", "我快没氧气了怎么办？", "帮我安排今天路线"];
+  const AI_QUESTIONS = ["现在最该做什么？", "今晚怎么营业最稳？", "去哪潜水收益最高？", "库存如何配菜？", "下一步升级什么？", "鱼枪怎么更容易命中？", "BOSS和稀有鱼怎么抓？", "图鉴怎么收集更快？", "我快没氧气了怎么办？", "帮我安排今天路线", "换水域有什么影响？", "餐厅按钮怎么用？"];
   const getAdvisorState = () => ({
     gold,
     level,
@@ -3141,8 +3508,13 @@ function DeepCatch() {
       status: c.status
     })).slice(0, 8),
     selectedAgent: ADVISOR_PROFILE,
-    fishingRule: "捕捉会进入鱼枪抓捕小游戏；小游戏过程中不持续消耗氧气；失败扣氧气。夜晚客人只点库存可做的菜，卖完或达接待上限会自动打烊。"
+    fishingRule: "捕捉会进入鱼枪抓捕小游戏；小游戏过程中不持续消耗氧气；失败扣氧气。五种模式：追踪、突刺、节奏瞄准、连击校准、压力控枪。夜晚客人只点库存可做的菜，卖完或达接待上限会自动打烊。"
   });
+  const findFishByText = msg => {
+    const exact = Object.entries(FISH).find(([, f]) => msg.includes(f.n));
+    if (exact) return exact;
+    return Object.entries(FISH).find(([id, f]) => msg.toLowerCase().includes(id.toLowerCase()) || msg.includes(f.cook || ""));
+  };
   const localAdvisorAnswer = msg => {
     const agent = ADVISOR_PROFILE;
     const stock = Object.entries(inv).filter(([, n]) => n > 0).sort((a, b) => (FISH[b[0]]?.basePrice || FISH[b[0]]?.v || 0) - (FISH[a[0]]?.basePrice || FISH[a[0]]?.v || 0));
@@ -3150,15 +3522,24 @@ function DeepCatch() {
     const bestDish = stock[0] ? FISH[stock[0][0]] : null;
     const openTables = customers.filter(c => c.status === "waiting" || c.status === "eating").length;
     const bestZone = ZONES[selZone]?.name || "当前水域";
+    const foundFish = findFishByText(msg);
+    if (foundFish && (msg.includes("哪里") || msg.includes("在哪") || msg.includes("怎么得") || msg.includes("去哪") || msg.includes("抓"))) {
+      const [id, f] = foundFish;
+      const z = ZONES[f.z];
+      const d = f.d === "shallow" ? "浅海" : f.d === "mid" ? "中层" : "深海";
+      return "【" + agent.emoji + agent.name + "】" + f.n + "在" + (z?.name || f.z) + "·" + d + "出现，品质" + "★".repeat(f.q) + "。" + (f.rare ? "它是稀有鱼，建议氧气充足、鱼枪升级后再抓。" : "它可以作为稳定食材。") + "抓捕会随机进入追踪、突刺、节奏、连击或控压；" + (f.ag ? "它会反击，失败扣氧更多。" : "普通鱼容错较高。") + "菜品：" + (f.cook || "暂无菜品") + "。";
+    }
     if (msg.includes("最该") || msg.includes("路线") || msg.includes("今天") || msg.includes("任务")) return `【${agent.emoji}${agent.name}】今天建议：先去${bestZone}补到3-5条能做菜的鱼，再开夜晚营业。当前库存：${topStock}。氧气充足就抓一条高价鱼当主菜；氧气低就上浮保收益。`;
     if (msg.includes("潜水") || msg.includes("去哪") || msg.includes("收益")) return `当前${phase === "day" ? "白天" : "夜晚"}，建议去${bestZone}补货。普通鱼保证今晚不断菜，稀有鱼等氧气和装载空间都够再追。装载箱超过80%就上浮，收益会更稳。`;
-    if (msg.includes("赚钱") || msg.includes("菜品") || msg.includes("配菜") || msg.includes("库存")) return `库存扫描：${topStock}。建议把${bestDish?.n || "最高价鱼"}留给夜晚做${bestDish?.cook || "主菜"}；低价鱼用于稳定接待。库存少于3条时不要拖长营业，卖完会自动打烊。`;
+    if (msg.includes("赚钱") || msg.includes("菜品") || msg.includes("配菜") || msg.includes("库存")) return `库存扫描：${topStock}。建议把${bestDish?.n || "最高价鱼"}留给夜晚做${bestDish?.cook || "主菜"}；低价鱼用于稳定接待。库存少于3条时不要拖长营业，卖完会自动打烊。高价库存多时可用限时套餐，等菜堆积时用快速备菜。`;
     if (msg.includes("装备") || msg.includes("升级")) return `升级路线：先装载箱，再氧气瓶，再潜水服，最后补强鱼枪。装载提高每次下潜收入，氧气提高容错，潜水服解锁高价值区域；当前金币¥${gold.toLocaleString()}，不够就刷浅海稳定鱼。`;
-    if (msg.includes("评分") || msg.includes("营业") || msg.includes("客人")) return `经营判断：当前在店${openTables}桌，今晚已接待${nightServeCount}/${NIGHT_CUSTOMER_LIMIT}。客人只会点库存里能做的菜；先保证3条以上食材再营业，评分会稳很多。`;
+    if (msg.includes("评分") || msg.includes("营业") || msg.includes("客人") || msg.includes("餐厅") || msg.includes("按钮")) return `经营判断：当前在店${openTables}桌，今晚已接待${nightServeCount}/${NIGHT_CUSTOMER_LIMIT}。客人只会点库存里能做的菜；先保证3条以上食材再营业。招牌推荐看最高价值菜，快速备菜救厨房，安抚客人换耐心，限时套餐提高收入但会压缩耐心。`;
     if (msg.includes("BOSS") || msg.includes("稀有")) return `稀有鱼策略：氧气低于35%别挑战；如果有枪械，先削血再用鱼枪抓捕。高星和稀有目标移动更快，最好等鱼枪升级后再硬追。失败只扣一次氧气，不会在小游戏里持续耗氧。`;
     if (msg.includes("图鉴")) return `图鉴路线：每次下潜换一个深度，优先拍保护动物、抓未发现鱼。节日当天看地图加成，稀有鱼等氧气瓶和装载箱升级后再追。当前图鉴${codexCount}/${Object.keys(FISH).length}。`;
     if (msg.includes("氧气") || msg.includes("危险") || msg.includes("上浮")) return `氧气建议：低于35%不要碰BOSS和稀有鱼，低于20%直接上浮。鱼枪抓捕中不会持续掉氧，但失败会扣一次氧气，所以残氧少时别赌高星鱼。`;
-    if (msg.includes("捕鱼") || msg.includes("抓鱼") || msg.includes("鱼枪") || msg.includes("命中")) return "鱼枪抓捕提示：绿色区域是游动目标，白色竖线是鱼枪杆。长按或连续点击左右按钮跟住目标，贴住绿色区才涨进度；普通鱼速度慢，稀有鱼和BOSS会更快，高级鱼枪能提高杆速和容错。";
+    if ((msg.includes("换水域") || msg.includes("换区")) && (msg.includes("捕鱼") || msg.includes("抓鱼") || msg.includes("鱼枪") || msg.includes("小游戏"))) return "换水域会消耗10点氧气，并刷新一整批鱼；旧区域没抓的鱼会全部散去。抓鱼会随机进入五种鱼枪小游戏：追踪、突刺、节奏瞄准、连击校准、压力控枪。高星、稀有、攻击性鱼会更快更难，鱼枪升级会提高速度、窗口和容错。";
+    if (msg.includes("捕鱼") || msg.includes("抓鱼") || msg.includes("鱼枪") || msg.includes("命中") || msg.includes("小游戏")) return "鱼枪抓捕有五种随机模式：追踪要左右跟住绿色目标；突刺要点随机弱点；节奏瞄准要在白线进绿区时发射；连击校准要在圆环亮起时点；压力控枪要按住/松手把压力留在绿区。鱼越稀有越快，鱼枪越好越宽松。";
+    if (msg.includes("换水域") || msg.includes("换区")) return "换水域会消耗10点氧气，并刷新一整批鱼；之前水域没抓的鱼会全部散去，不会继续留在列表里。适合当前鱼价值低、缺目标鱼、或者想刷图鉴时使用。";
     return `【${agent.emoji}${agent.name}】态势判断：${phase === "day" ? "先潜水补货" : "优先快速上菜"}。当前库存：${topStock}。我建议下一步：${phase === "day" ? "抓3-4条可做菜的鱼再开店" : "把最高价库存菜先卖掉，避免客人等待"}。`;
   };
   const askAi = async (preset = null) => {
@@ -3186,7 +3567,7 @@ function DeepCatch() {
     if (phase === "day" && dives === 0) tips.push("白天建议先补3条以上食材，再开夜晚营业。");
     if (phase === "day" && totalStock < 3) tips.push("库存偏低，优先抓普通鱼，别急着挑战稀有鱼。");
     if (phase === "night" && totalStock <= 0) tips.push("库存已空，等待桌台清空后会自动打烊。");
-    if (phase === "night" && customers.some(c => c.status === "waiting")) tips.push("有客人在等菜，先处理已点订单，评分更稳。");
+    if (phase === "night" && customers.some(c => c.status === "waiting")) tips.push("有客人在等菜：耐心低先安抚，厨房排队就快速备菜。");
     if (gold >= 3000 && eq("cargo").id === "c1") tips.push("金币够时优先升级装载箱，每次下潜收益会明显提高。");
     if (codexCount < 8) tips.push("图鉴前期按水域逐个扫，保护动物拍照也算发现。");
     return tips.slice(0, 3);
@@ -3538,7 +3919,7 @@ function DeepCatch() {
         fontWeight: 800,
         color: "#f2fbff"
       }
-    }, fishing.emoji, " \u6B63\u5728\u9C7C\u67AA\u8FFD\u8E2A ", fishing.name), /*#__PURE__*/React.createElement("div", {
+    }, fishing.emoji, " ", fishing.mode === "whack" ? "鱼枪突刺" : fishing.mode === "rhythm" ? "节奏瞄准" : fishing.mode === "combo" ? "连击校准" : fishing.mode === "pressure" ? "压力控枪" : "鱼枪追踪", " ", fishing.name), /*#__PURE__*/React.createElement("div", {
       style: {
         fontSize: 9,
         color: fishing.ag ? "#ffb088" : "#82ddff"
@@ -3550,12 +3931,13 @@ function DeepCatch() {
         marginBottom: 8,
         fontSize: 8,
         color: "#8fcce2",
-        fontWeight: 700
+        fontWeight: 700,
+        flexWrap: "wrap"
       }
-    }, /*#__PURE__*/React.createElement("span", null, "\u9C7C\u901F ", fishing.targetMaxSpeed.toFixed(1)), /*#__PURE__*/React.createElement("span", null, "\u6746\u901F ", fishing.cursorSpeed.toFixed(1)), /*#__PURE__*/React.createElement("span", null, "\u547D\u4E2D\u7A97 ", Math.round(fishing.hitWindow * 2), "%")), /*#__PURE__*/React.createElement("div", {
+    }, /*#__PURE__*/React.createElement("span", null, "\u6A21\u5F0F ", fishing.mode === "whack" ? "突刺" : fishing.mode === "rhythm" ? "节奏" : fishing.mode === "combo" ? "连击" : fishing.mode === "pressure" ? "控压" : "追踪"), /*#__PURE__*/React.createElement("span", null, "\u88C5\u5907 ", eq("harpoon").name), fishing.timeLeft != null && /*#__PURE__*/React.createElement("span", null, "\u5269\u4F59 ", (fishing.timeLeft / 1000).toFixed(1), "s"), fishing.mode === "track" && /*#__PURE__*/React.createElement("span", null, "\u9C7C\u901F ", fishing.targetMaxSpeed.toFixed(1))), fishing.mode === "track" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
       style: {
         position: "relative",
-        height: 92,
+        height: 96,
         background: "linear-gradient(180deg,rgba(0,60,115,.58),rgba(0,10,24,.92))",
         border: "1px solid rgba(0,160,230,.5)",
         borderRadius: 10,
@@ -3565,20 +3947,20 @@ function DeepCatch() {
     }, /*#__PURE__*/React.createElement("div", {
       style: {
         position: "absolute",
-        left: `${fishing.target}%`,
+        left: fishing.target + "%",
         top: 12,
-        width: `${fishing.hitWindow * 2}%`,
+        width: fishing.hitWindow * 2 + "%",
         height: 60,
-        marginLeft: `-${fishing.hitWindow}%`,
+        marginLeft: "-" + fishing.hitWindow + "%",
         borderRadius: 10,
         background: fishing.good ? "rgba(80,255,160,.40)" : "rgba(80,255,160,.22)",
-        border: `1px solid ${fishing.good ? "#66ffaa" : "#44ee99"}`,
+        border: "1px solid " + (fishing.good ? "#66ffaa" : "#44ee99"),
         boxShadow: fishing.good ? "0 0 24px rgba(80,255,160,.55)" : "0 0 16px rgba(80,255,160,.25)"
       }
     }), /*#__PURE__*/React.createElement("div", {
       style: {
         position: "absolute",
-        left: `${fishing.target}%`,
+        left: fishing.target + "%",
         top: 4,
         width: 8,
         height: 8,
@@ -3590,7 +3972,7 @@ function DeepCatch() {
     }), /*#__PURE__*/React.createElement("div", {
       style: {
         position: "absolute",
-        left: `${fishing.cursor}%`,
+        left: fishing.cursor + "%",
         top: 5,
         width: 5,
         height: 74,
@@ -3612,7 +3994,7 @@ function DeepCatch() {
       }
     }, /*#__PURE__*/React.createElement("div", {
       style: {
-        width: `${fishing.progress}%`,
+        width: fishing.progress + "%",
         height: "100%",
         background: fishing.progress < 25 ? "#ff5555" : "linear-gradient(90deg,#00aaff,#44ff99)",
         transition: "width .08s"
@@ -3655,7 +4037,288 @@ function DeepCatch() {
         textAlign: "center",
         fontWeight: 700
       }
-    }, "\u957F\u6309\u6216\u8FDE\u7EED\u70B9\u51FB\u5DE6\u53F3\u952E\uFF0C\u8BA9\u767D\u8272\u9C7C\u67AA\u6746\u8DDF\u4E0A\u7EFF\u8272\u6E38\u52A8\u76EE\u6807\uFF1B\u8D34\u4F4F\u547D\u4E2D\u533A\u624D\u6DA8\u6761\uFF0C\u505C\u624B\u6216\u504F\u79BB\u4F1A\u6389\u6761\u3002")), curFestival && /*#__PURE__*/React.createElement("div", {
+    }, "\u957F\u6309\u6216\u8FDE\u7EED\u70B9\u51FB\u5DE6\u53F3\u952E\uFF0C\u8BA9\u9C7C\u67AA\u6746\u8DDF\u4E0A\u7EFF\u8272\u76EE\u6807\uFF1B\u9AD8\u661F\u9C7C\u4F1A\u66F4\u5FEB\u8F6C\u5411\u3002")), fishing.mode === "whack" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+      onPointerDown: e => strikeSpot(e),
+      style: {
+        position: "relative",
+        height: 170,
+        background: "radial-gradient(circle at 50% 50%,rgba(0,100,140,.45),rgba(0,8,22,.94))",
+        border: "1px solid rgba(0,160,230,.5)",
+        borderRadius: 10,
+        overflow: "hidden",
+        marginBottom: 9,
+        touchAction: "none",
+        cursor: "crosshair"
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        position: "absolute",
+        left: fishing.targetX + "%",
+        top: fishing.targetY + "%",
+        width: fishing.hitRadius * 2,
+        height: fishing.hitRadius * 2,
+        marginLeft: -fishing.hitRadius,
+        marginTop: -fishing.hitRadius,
+        borderRadius: "50%",
+        background: fishing.good ? "rgba(100,255,170,.8)" : "rgba(80,255,160,.45)",
+        border: "2px solid #80ffd0",
+        boxShadow: "0 0 22px rgba(100,255,190,.6)",
+        transform: "scale(" + (.75 + fishing.spotLife / fishing.reactMs * .35) + ")"
+      }
+    }), /*#__PURE__*/React.createElement("div", {
+      style: {
+        position: "absolute",
+        left: 10,
+        right: 10,
+        bottom: 8,
+        height: 7,
+        background: "rgba(0,0,0,.45)",
+        borderRadius: 4,
+        overflow: "hidden"
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        width: fishing.progress + "%",
+        height: "100%",
+        background: "linear-gradient(90deg,#00aaff,#44ff99)",
+        transition: "width .08s"
+      }
+    }))), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 9,
+        color: "#8fcce2",
+        textAlign: "center",
+        fontWeight: 700
+      }
+    }, "\u7EFF\u8272\u5F31\u70B9\u4F1A\u968F\u673A\u51FA\u73B0\uFF0C\u5FEB\u901F\u70B9\u51FB\u5F31\u70B9\u7A81\u523A\uFF1B\u9C7C\u67AA\u8D8A\u597D\uFF0C\u5F31\u70B9\u505C\u7559\u8D8A\u4E45\u3001\u5F97\u5206\u8D8A\u9AD8\u3002")), fishing.mode === "rhythm" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+      style: {
+        position: "relative",
+        height: 112,
+        background: "linear-gradient(180deg,rgba(0,60,115,.58),rgba(0,10,24,.92))",
+        border: "1px solid rgba(0,160,230,.5)",
+        borderRadius: 10,
+        overflow: "hidden",
+        marginBottom: 9
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        position: "absolute",
+        left: fishing.target + "%",
+        top: 18,
+        width: fishing.hitWindow * 2 + "%",
+        height: 58,
+        marginLeft: "-" + fishing.hitWindow + "%",
+        borderRadius: 12,
+        background: fishing.good ? "rgba(80,255,160,.45)" : "rgba(80,255,160,.22)",
+        border: "1px solid #5dffad"
+      }
+    }), /*#__PURE__*/React.createElement("div", {
+      style: {
+        position: "absolute",
+        left: fishing.cursor + "%",
+        top: 8,
+        width: 7,
+        height: 78,
+        marginLeft: -3.5,
+        borderRadius: 4,
+        background: "#fff",
+        boxShadow: "0 0 16px #66ffff"
+      }
+    }), /*#__PURE__*/React.createElement("div", {
+      style: {
+        position: "absolute",
+        left: 10,
+        right: 10,
+        bottom: 8,
+        height: 7,
+        background: "rgba(0,0,0,.45)",
+        borderRadius: 4,
+        overflow: "hidden"
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        width: fishing.progress + "%",
+        height: "100%",
+        background: "linear-gradient(90deg,#00aaff,#44ff99)",
+        transition: "width .08s"
+      }
+    }))), /*#__PURE__*/React.createElement("button", {
+      onClick: rhythmShot,
+      style: {
+        width: "100%",
+        padding: "12px 0",
+        fontSize: 13,
+        fontWeight: 900,
+        background: fishing.good ? "rgba(40,210,120,.58)" : "rgba(0,90,170,.38)",
+        border: "1px solid #00aaff",
+        borderRadius: 10,
+        color: "#e7fbff",
+        cursor: "pointer"
+      }
+    }, "\u53D1\u5C04\u9C7C\u67AA"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 9,
+        color: "#8fcce2",
+        marginTop: 7,
+        textAlign: "center",
+        fontWeight: 700
+      }
+    }, "\u767D\u7EBF\u626B\u8FDB\u7EFF\u8272\u533A\u65F6\u70B9\u51FB\u53D1\u5C04\uFF1B\u9AD8\u7EA7\u9C7C\u67AA\u4F1A\u8BA9\u547D\u4E2D\u533A\u66F4\u5BBD\u3001\u52A0\u5206\u66F4\u591A\u3002")), fishing.mode === "combo" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+      style: {
+        height: 122,
+        background: "linear-gradient(180deg,rgba(0,70,120,.55),rgba(0,10,24,.92))",
+        border: "1px solid rgba(0,160,230,.5)",
+        borderRadius: 10,
+        marginBottom: 9,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        position: "relative",
+        overflow: "hidden"
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        width: 76,
+        height: 76,
+        borderRadius: "50%",
+        background: fishing.flash > 0 ? "rgba(90,255,170,.65)" : "rgba(0,70,110,.48)",
+        border: "2px solid " + (fishing.flash > 0 ? "#7dffc5" : "#1f87a8"),
+        boxShadow: fishing.flash > 0 ? "0 0 28px rgba(90,255,170,.7)" : "none",
+        transform: fishing.flash > 0 ? "scale(1.1)" : "scale(.9)",
+        transition: "transform .08s"
+      }
+    }), /*#__PURE__*/React.createElement("div", {
+      style: {
+        position: "absolute",
+        top: 12,
+        right: 12,
+        fontSize: 10,
+        color: "#9feeff",
+        fontWeight: 800
+      }
+    }, "\u8FDE\u51FB ", fishing.streak || 0), /*#__PURE__*/React.createElement("div", {
+      style: {
+        position: "absolute",
+        left: 10,
+        right: 10,
+        bottom: 8,
+        height: 7,
+        background: "rgba(0,0,0,.45)",
+        borderRadius: 4,
+        overflow: "hidden"
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        width: fishing.progress + "%",
+        height: "100%",
+        background: "linear-gradient(90deg,#00aaff,#44ff99)",
+        transition: "width .08s"
+      }
+    }))), /*#__PURE__*/React.createElement("button", {
+      onClick: comboTap,
+      style: {
+        width: "100%",
+        padding: "12px 0",
+        fontSize: 13,
+        fontWeight: 900,
+        background: fishing.flash > 0 ? "rgba(40,210,120,.58)" : "rgba(0,90,170,.38)",
+        border: "1px solid #00aaff",
+        borderRadius: 10,
+        color: "#e7fbff",
+        cursor: "pointer"
+      }
+    }, "\u6821\u51C6\u523A\u51FB"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 9,
+        color: "#8fcce2",
+        marginTop: 7,
+        textAlign: "center",
+        fontWeight: 700
+      }
+    }, "\u5706\u73AF\u4EAE\u8D77\u65F6\u70B9\u51FB\uFF0C\u8FDE\u7EED\u547D\u4E2D\u4F1A\u53E0\u52A0\u8FDB\u5EA6\uFF1B\u9C7C\u67AA\u8D8A\u597D\uFF0C\u4EAE\u8D77\u7A97\u53E3\u8D8A\u957F\u3002")), fishing.mode === "pressure" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+      style: {
+        position: "relative",
+        height: 112,
+        background: "linear-gradient(180deg,rgba(0,60,115,.58),rgba(0,10,24,.92))",
+        border: "1px solid rgba(0,160,230,.5)",
+        borderRadius: 10,
+        overflow: "hidden",
+        marginBottom: 9
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        position: "absolute",
+        left: "10%",
+        right: "10%",
+        top: 38,
+        height: 22,
+        borderRadius: 12,
+        background: "rgba(255,255,255,.08)",
+        border: "1px solid rgba(120,220,255,.25)"
+      }
+    }), /*#__PURE__*/React.createElement("div", {
+      style: {
+        position: "absolute",
+        left: fishing.low + "%",
+        top: 34,
+        width: fishing.high - fishing.low + "%",
+        height: 30,
+        borderRadius: 12,
+        background: fishing.good ? "rgba(80,255,160,.42)" : "rgba(80,255,160,.22)",
+        border: "1px solid #5dffad"
+      }
+    }), /*#__PURE__*/React.createElement("div", {
+      style: {
+        position: "absolute",
+        left: fishing.pressure + "%",
+        top: 25,
+        width: 8,
+        height: 48,
+        marginLeft: -4,
+        borderRadius: 4,
+        background: "#fff",
+        boxShadow: "0 0 16px #66ffff"
+      }
+    }), /*#__PURE__*/React.createElement("div", {
+      style: {
+        position: "absolute",
+        left: 10,
+        right: 10,
+        bottom: 8,
+        height: 7,
+        background: "rgba(0,0,0,.45)",
+        borderRadius: 4,
+        overflow: "hidden"
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        width: fishing.progress + "%",
+        height: "100%",
+        background: "linear-gradient(90deg,#00aaff,#44ff99)",
+        transition: "width .08s"
+      }
+    }))), /*#__PURE__*/React.createElement("button", _extends({}, pressureProps, {
+      style: {
+        width: "100%",
+        padding: "12px 0",
+        fontSize: 13,
+        fontWeight: 900,
+        background: fishing.active ? "rgba(40,210,120,.58)" : "rgba(0,90,170,.38)",
+        border: "1px solid #00aaff",
+        borderRadius: 10,
+        color: "#e7fbff",
+        cursor: "pointer",
+        touchAction: "none"
+      }
+    }), "\u6309\u4F4F\u52A0\u538B"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 9,
+        color: "#8fcce2",
+        marginTop: 7,
+        textAlign: "center",
+        fontWeight: 700
+      }
+    }, "\u6309\u4F4F\u4F1A\u5347\u538B\uFF0C\u677E\u624B\u4F1A\u6CC4\u538B\uFF0C\u628A\u767D\u7EBF\u63A7\u5236\u5728\u7EFF\u8272\u538B\u529B\u533A\u5185\u3002"))), curFestival && /*#__PURE__*/React.createElement("div", {
       style: {
         background: `${curFestival.color}18`,
         border: `1px solid ${curFestival.color}44`,
@@ -4519,6 +5182,62 @@ function DeepCatch() {
       color: "#ffbb44"
     }
   }, "\u26A0\uFE0F \u9910\u5385\u4EC5\u591C\u665A\u8425\u4E1A\uFF01\u767D\u5929\u6F5C\u6C34\u6355\u9C7C\u79EF\u7D2F\u98DF\u6750\u3002"), phase === "night" && /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "1fr 1fr",
+      gap: 8,
+      marginBottom: 11
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: recommendSignature,
+    style: {
+      padding: "9px 8px",
+      fontSize: 11,
+      fontWeight: 800,
+      background: "rgba(170,110,0,.32)",
+      border: "1px solid #cc9900",
+      borderRadius: 9,
+      color: "#ffe08a",
+      cursor: "pointer"
+    }
+  }, "\uD83D\uDCE3 \u62DB\u724C\u63A8\u8350"), /*#__PURE__*/React.createElement("button", {
+    onClick: rushCooking,
+    disabled: !cookQueue.length,
+    style: {
+      padding: "9px 8px",
+      fontSize: 11,
+      fontWeight: 800,
+      background: cookQueue.length ? "rgba(0,120,190,.34)" : "rgba(30,30,30,.35)",
+      border: "1px solid rgba(0,160,230,.45)",
+      borderRadius: 9,
+      color: cookQueue.length ? "#b8f2ff" : "#5b6b70",
+      cursor: cookQueue.length ? "pointer" : "not-allowed"
+    }
+  }, "\uD83D\uDD25 \u5FEB\u901F\u5907\u83DC"), /*#__PURE__*/React.createElement("button", {
+    onClick: comfortGuests,
+    style: {
+      padding: "9px 8px",
+      fontSize: 11,
+      fontWeight: 800,
+      background: "rgba(0,120,90,.30)",
+      border: "1px solid #22aa88",
+      borderRadius: 9,
+      color: "#9fffe0",
+      cursor: "pointer"
+    }
+  }, "\uD83C\uDF75 \u5B89\u629A\u5BA2\u4EBA"), /*#__PURE__*/React.createElement("button", {
+    onClick: premiumCombo,
+    style: {
+      padding: "9px 8px",
+      fontSize: 11,
+      fontWeight: 800,
+      background: "rgba(120,70,190,.30)",
+      border: "1px solid #9b7cff",
+      borderRadius: 9,
+      color: "#dcc8ff",
+      cursor: "pointer"
+    }
+  }, "\uD83D\uDC8E \u9650\u65F6\u5957\u9910")), phase === "night" && /*#__PURE__*/React.createElement("div", {
     style: {
       marginBottom: 12
     }
